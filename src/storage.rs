@@ -75,7 +75,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load() {
+    fn test_parse() {
         let manager = StorageManager::parse(
             "
                 A 1
@@ -94,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flush() {
+    fn test_load() {
         let mut manager = StorageManager::new();
         let mut entries = HashMap::new();
         entries.insert("A", "2");
