@@ -2,8 +2,9 @@ use crate::concurrent::{LockManager, Protocol, TimestampManager};
 use crate::storage::StorageManager;
 use std::sync::mpsc;
 use std::sync::mpsc::{sync_channel, Receiver, Sender, SyncSender};
+use std::thread::JoinHandle;
 use std::{collections::HashMap, ops::Deref};
-use std::{mem, thread};
+use std::{mem, thread, vec};
 
 pub type TransactionId = u32;
 type OpEntry = (u32, Op);
@@ -117,6 +118,7 @@ pub struct TransactionManager {
     senders: HashMap<u32, Sender<OpMessage>>,
     commited: u32,
     alg: Protocol,
+    pool: Vec<JoinHandle<()>>,
 }
 
 impl TransactionManager {
@@ -133,6 +135,7 @@ impl TransactionManager {
             senders: HashMap::new(),
             commited: 0,
             alg,
+            pool: vec![],
         }
     }
 
@@ -143,9 +146,9 @@ impl TransactionManager {
 
         self.senders.insert(id, tx);
 
-        thread::spawn(move || {
+        self.pool.push(thread::spawn(move || {
             Transaction::new(id, ops, sender, rx).exec();
-        });
+        }));
     }
 
     pub fn run(&mut self) {
@@ -164,6 +167,12 @@ impl TransactionManager {
             }
 
             commited = self.commited;
+        }
+
+        let pool = mem::replace(&mut self.pool, vec![]);
+
+        for handle in pool.into_iter() {
+            handle.join().unwrap();
         }
     }
 
