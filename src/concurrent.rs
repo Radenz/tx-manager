@@ -29,14 +29,18 @@ impl LockManager {
         }
     }
 
-    pub fn request(&mut self, id: TransactionId, key: Key) {
+    pub fn request(&mut self, id: TransactionId, key: &str) -> bool {
+        let key = key.to_owned();
+
         if self.locks.contains_key(&key) {
             self.queue.push_back((id, key));
-            return;
+            return false;
         }
 
         self.locks.insert(key, id);
         self.granted.push_back(id);
+
+        true
     }
 
     pub fn release_all(&mut self, id: TransactionId) {

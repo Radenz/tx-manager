@@ -110,6 +110,7 @@ impl Deref for Transaction {
 pub struct TransactionManager {
     lock_manager: LockManager,
     ts_manager: TimestampManager,
+    storage_manager: StorageManager,
     last_id: TransactionId,
     remote_sender: SyncSender<OpEntry>,
     receiver: Receiver<OpEntry>,
@@ -119,12 +120,13 @@ pub struct TransactionManager {
 }
 
 impl TransactionManager {
-    pub fn new(alg: Protocol) -> Self {
+    pub fn new(storage_manager: StorageManager, alg: Protocol) -> Self {
         let (sender, receiver) = sync_channel::<OpEntry>(mem::size_of::<OpEntry>() * 8);
 
         Self {
             lock_manager: LockManager::new(),
             ts_manager: TimestampManager::new(),
+            storage_manager,
             last_id: 0,
             remote_sender: sender,
             receiver,
@@ -166,6 +168,21 @@ impl TransactionManager {
     }
 
     pub fn handle_read(&mut self, id: TransactionId, key: String) {
+        match self.alg {
+            Protocol::Lock => {
+                let granted = self.lock_manager.request(id, &key);
+
+                if granted {
+                    let value = self.storage_manager.read(&key).unwrap().to_owned();
+                    let sender = self.senders.get(&id).unwrap();
+
+                    sender.send(OpMessage::Ok(value)).unwrap();
+                }
+            }
+            Protocol::Validation => {}
+            Protocol::Timestamp => {}
+        }
+
         todo!("Check lock or timestamp")
     }
 
@@ -183,7 +200,8 @@ impl TransactionManager {
             Protocol::Timestamp => {}
         }
 
-        todo!("Validate")
+        todo!("Validate");
+        todo!("Check released lock")
     }
 
     pub fn generate_id(&mut self) -> TransactionId {
