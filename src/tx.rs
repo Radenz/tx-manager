@@ -1,4 +1,4 @@
-use crate::concurrent::{LockManager, TimestampManager};
+use crate::concurrent::{LockManager, Protocol, TimestampManager};
 use crate::storage::StorageManager;
 use std::sync::mpsc;
 use std::sync::mpsc::{sync_channel, Receiver, Sender, SyncSender};
@@ -115,10 +115,11 @@ pub struct TransactionManager {
     receiver: Receiver<OpEntry>,
     senders: HashMap<u32, Sender<OpMessage>>,
     commited: u32,
+    alg: Protocol,
 }
 
 impl TransactionManager {
-    pub fn new() -> Self {
+    pub fn new(alg: Protocol) -> Self {
         let (sender, receiver) = sync_channel::<OpEntry>(mem::size_of::<OpEntry>() * 8);
 
         Self {
@@ -129,6 +130,7 @@ impl TransactionManager {
             receiver,
             senders: HashMap::new(),
             commited: 0,
+            alg,
         }
     }
 
@@ -148,15 +150,18 @@ impl TransactionManager {
         let mut commited = self.commited;
         let txs = self.last_id;
 
+        // while not all transactions has been committed
         while commited != txs {
             let (id, op) = self.receiver.recv().unwrap();
 
             match op {
                 Op::Read(key) => self.handle_read(id, key),
-                Op::Write(_, _) => {}
-                Op::Commit => {}
+                Op::Write(key, value) => self.handle_write(id, key, value),
+                Op::Commit => self.handle_commit(id),
                 _ => {}
             }
+
+            commited = self.commited;
         }
     }
 
@@ -168,12 +173,25 @@ impl TransactionManager {
         todo!("Check lock or timestamp")
     }
 
-    pub fn handle_commit(&mut self, id: TransactionId, key: String, value: String) {
+    pub fn handle_commit(&mut self, id: TransactionId) {
+        match self.alg {
+            Protocol::Lock => {
+                self.release_all_locks(id);
+                self.commited += 1;
+            }
+            Protocol::Validation => {}
+            Protocol::Timestamp => {}
+        }
+
         todo!("Validate")
     }
 
     pub fn generate_id(&mut self) -> TransactionId {
         self.last_id += 1;
         return self.last_id;
+    }
+
+    fn release_all_locks(&mut self, id: TransactionId) {
+        self.lock_manager.release_all(id);
     }
 }

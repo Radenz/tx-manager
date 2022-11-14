@@ -8,6 +8,12 @@ use crate::{
 pub struct Lock(String);
 pub type OpQueue = VecDeque<(u32, Op)>;
 
+pub enum Protocol {
+    Lock,
+    Validation,
+    Timestamp,
+}
+
 pub struct LockManager {
     locks: HashMap<Key, TransactionId>,
     queue: VecDeque<(TransactionId, Key)>,
@@ -31,6 +37,10 @@ impl LockManager {
 
         self.locks.insert(key, id);
         self.granted.push_back(id);
+    }
+
+    pub fn release_all(&mut self, id: TransactionId) {
+        self.locks.retain(|_, v| *v != id);
     }
 
     pub fn release(&mut self, _: TransactionId, key: Key) {
