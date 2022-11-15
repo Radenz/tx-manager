@@ -99,6 +99,10 @@ impl LockManager {
     pub fn has(&mut self, id: TransactionId, key: &str) -> bool {
         &id == self.locks.get(key).unwrap_or(&0u32)
     }
+
+    pub fn get_grantee(&self, key: &str) -> TransactionId {
+        *self.locks.get(key).unwrap_or(&0u32)
+    }
 }
 
 pub struct TimestampManager {

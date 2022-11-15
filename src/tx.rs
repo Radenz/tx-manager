@@ -240,11 +240,24 @@ impl TransactionManager {
                 if granted {
                     let value = self.storage_manager.read(&key).unwrap().to_owned();
                     println!("[!] Read {} = {} for {}.", key, value, id);
-                    let sender = self.senders.get(&id).unwrap();
 
+                    let sender = self.senders.get(&id).unwrap();
                     sender
                         .send(OpMessage::Ok(value))
                         .expect("Sender manager read error");
+                } else {
+                    // Wait-die scheme
+
+                    let grantee = self.lock_manager.get_grantee(&key);
+                    if self.ts_manager.is_earlier(grantee, id) {
+                        // Die
+                        self.release_all_locks(id);
+                        println!("[!] Aborting {} by wait-die scheme.", id);
+                        let sender = self.senders.get(&id).unwrap();
+                        sender
+                            .send(OpMessage::Abort)
+                            .expect("Sender manager read error");
+                    }
                 }
             }
             Protocol::Validation => {}
