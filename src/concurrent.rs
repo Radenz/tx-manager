@@ -33,9 +33,12 @@ impl LockManager {
         let key = key.to_owned();
 
         if self.locks.contains_key(&key) {
+            println!("[!] Queueing lock request of {} from {}.", key, id);
             self.queue.push_back((id, key));
             return false;
         }
+
+        println!("[!] Granted exclusive lock of {} to {}.", key, id);
 
         self.locks.insert(key, id);
         self.granted.push_back(id);
@@ -44,6 +47,7 @@ impl LockManager {
     }
 
     pub fn release_all(&mut self, id: TransactionId) {
+        println!("[!] Releasing all locks granted to {}.", id);
         self.locks.retain(|_, v| *v != id);
     }
 
@@ -72,8 +76,8 @@ impl LockManager {
         }
     }
 
-    pub fn has(&mut self, _: TransactionId, key: Key) -> bool {
-        self.locks.contains_key(&key)
+    pub fn has(&mut self, id: TransactionId, key: &str) -> bool {
+        &id == self.locks.get(key).unwrap_or(&0u32)
     }
 }
 
@@ -81,6 +85,7 @@ pub struct TimestampManager {}
 
 impl TimestampManager {
     pub fn new() -> Self {
-        unimplemented!()
+        // unimplemented!()
+        Self {}
     }
 }

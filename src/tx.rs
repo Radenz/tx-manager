@@ -2,11 +2,12 @@ use regex::Regex;
 
 use crate::concurrent::{LockManager, Protocol, TimestampManager};
 use crate::storage::StorageManager;
+use std::ffi::OsStr;
 use std::sync::mpsc;
 use std::sync::mpsc::{sync_channel, Receiver, Sender, SyncSender};
 use std::thread::JoinHandle;
 use std::{collections::HashMap, ops::Deref};
-use std::{mem, thread, vec};
+use std::{fs, mem, thread, vec};
 
 pub type TransactionId = u32;
 type OpEntry = (u32, Op);
@@ -56,11 +57,12 @@ impl Transaction {
                 Op::Read(key) => self.read(key),
                 Op::Write(key, _) => self.write(key),
                 Op::Assign(key, value) => self.assign(key, value),
-                Op::Commit => self.commit(),
+                Op::Commit => {}
             }
         }
 
         self.operations = ops;
+        self.commit();
     }
 
     pub fn abort(&mut self) {
@@ -68,15 +70,17 @@ impl Transaction {
     }
 
     pub fn commit(&mut self) {
-        unimplemented!()
+        self.sender
+            .send((self.id, Op::Commit))
+            .expect("Sender read error");
     }
 
     pub fn read(&mut self, key: &str) {
         self.sender
             .send((self.id, Op::Read(key.to_owned())))
-            .unwrap();
+            .expect("Sender read error");
 
-        let message = self.receiver.recv().unwrap();
+        let message = self.receiver.recv().expect("Receiver manager read error");
 
         match message {
             OpMessage::Abort => self.abort(),
@@ -88,9 +92,9 @@ impl Transaction {
         let value = self.frame.read(key).unwrap();
         self.sender
             .send((self.id, Op::Write(key.to_owned(), value.to_owned())))
-            .unwrap();
+            .expect("Sender write error");
 
-        let message = self.receiver.recv().unwrap();
+        let message = self.receiver.recv().expect("Receiver manager write error");
 
         match message {
             OpMessage::Abort => self.abort(),
@@ -189,25 +193,25 @@ impl TransactionManager {
         }
     }
 
-    pub fn exec(&mut self, ops: Vec<Op>) {
-        let id = self.generate_id();
-        let sender = self.remote_sender.clone();
-        let (tx, rx) = mpsc::channel::<OpMessage>();
+    pub fn exec(&mut self, tx_ops: Vec<Vec<Op>>) {
+        for ops in tx_ops {
+            let id = self.generate_id();
+            let sender = self.remote_sender.clone();
+            let (tx, rx) = mpsc::channel::<OpMessage>();
 
-        self.senders.insert(id, tx);
+            self.senders.insert(id, tx);
 
-        self.pool.push(thread::spawn(move || {
-            Transaction::new(id, ops, sender, rx).exec();
-        }));
+            self.pool.push(thread::spawn(move || {
+                Transaction::new(id, ops, sender, rx).exec();
+            }));
+        }
     }
 
     pub fn run(&mut self) {
         let mut commited = self.commited;
-        let txs = self.last_id;
 
-        // while not all transactions has been committed
-        while commited != txs {
-            let (id, op) = self.receiver.recv().unwrap();
+        while commited != self.last_id {
+            let (id, op) = self.receiver.recv().expect("Receiver error");
 
             match op {
                 Op::Read(key) => self.handle_read(id, key),
@@ -229,24 +233,43 @@ impl TransactionManager {
     pub fn handle_read(&mut self, id: TransactionId, key: String) {
         match self.alg {
             Protocol::Lock => {
-                let granted = self.lock_manager.request(id, &key);
+                let granted =
+                    self.lock_manager.has(id, &key) || self.lock_manager.request(id, &key);
 
                 if granted {
                     let value = self.storage_manager.read(&key).unwrap().to_owned();
+                    println!("[!] Read {} = {} for {}.", key, value, id);
                     let sender = self.senders.get(&id).unwrap();
 
-                    sender.send(OpMessage::Ok(value)).unwrap();
+                    sender
+                        .send(OpMessage::Ok(value))
+                        .expect("Sender manager read error");
                 }
             }
             Protocol::Validation => {}
             Protocol::Timestamp => {}
         }
-
-        todo!("Check lock or timestamp")
     }
 
     pub fn handle_write(&mut self, id: TransactionId, key: String, value: String) {
-        todo!("Check lock or timestamp")
+        match self.alg {
+            Protocol::Lock => {
+                let granted =
+                    self.lock_manager.has(id, &key) || self.lock_manager.request(id, &key);
+
+                if granted {
+                    self.storage_manager.write(&key, &value);
+                    println!("[!] Wrote {} = {} by {}.", key, value, id);
+                    let sender = self.senders.get(&id).unwrap();
+
+                    sender
+                        .send(OpMessage::Ok(value))
+                        .expect("Sender manager read error");
+                }
+            }
+            Protocol::Validation => {}
+            Protocol::Timestamp => {}
+        }
     }
 
     pub fn handle_commit(&mut self, id: TransactionId) {
@@ -254,12 +277,11 @@ impl TransactionManager {
             Protocol::Lock => {
                 self.release_all_locks(id);
                 self.commited += 1;
+                println!("[!] {} successfully commited.", id);
             }
             Protocol::Validation => {}
             Protocol::Timestamp => {}
         }
-
-        todo!("Validate and check released lock")
     }
 
     pub fn generate_id(&mut self) -> TransactionId {
@@ -270,6 +292,31 @@ impl TransactionManager {
     fn release_all_locks(&mut self, id: TransactionId) {
         self.lock_manager.release_all(id);
     }
+}
+
+pub type ParseResult = (Option<StorageManager>, Vec<Vec<Op>>);
+
+pub fn parse_dir(dir: String) -> ParseResult {
+    let dir = fs::read_dir(dir).expect("Failed to read the directory.");
+    let mut tx_ops = vec![];
+    let mut storage_manager = None;
+
+    for entry in dir {
+        let entry = entry.expect("Failed to read directory entry.");
+        let path = entry.path();
+        let file_name = path.file_name().expect("Failed to extract path file name.");
+        let is_init = file_name == OsStr::new("init.txt");
+        let content = fs::read_to_string(path).expect("Failed to read file.");
+
+        if is_init {
+            storage_manager = Some(StorageManager::parse(&content));
+            continue;
+        }
+
+        tx_ops.push(parse_ops(&content));
+    }
+
+    (storage_manager, tx_ops)
 }
 
 #[cfg(test)]
