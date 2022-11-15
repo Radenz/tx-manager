@@ -7,13 +7,8 @@ use tx_manager::{
     tx::{parse_dir, Transaction, TransactionManager},
 };
 fn main() {
-    // let storage_manager = StorageManager::new();
-    // let mut manager = TransactionManager::new(storage_manager, Protocol::Lock);
-
     let cli = Cli::parse();
-
     let protocol = cli.protocol.into();
-
     let (mut sm, tx_ops) = parse_dir(cli.dir);
 
     if sm.is_none() {
@@ -25,9 +20,8 @@ fn main() {
 
     let mut tx_manager = TransactionManager::new(sm, protocol);
 
-    for ops in tx_ops {
-        tx_manager.exec(ops);
-    }
+    tx_manager.exec(tx_ops);
+    tx_manager.run();
 }
 
 #[derive(Parser)]
