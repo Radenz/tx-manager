@@ -234,10 +234,7 @@ impl TransactionManager {
     pub fn handle_read(&mut self, id: TransactionId, key: String) {
         match self.alg {
             Protocol::Lock => {
-                let granted =
-                    self.lock_manager.has(id, &key) || self.lock_manager.request(id, &key);
-
-                if granted {
+                if self.has_lock(id, &key) {
                     let value = self.storage_manager.read(&key).unwrap().to_owned();
                     println!("[!] Read {} = {} for {}.", key, value, id);
 
@@ -251,12 +248,12 @@ impl TransactionManager {
                     let grantee = self.lock_manager.get_grantee(&key);
                     if self.ts_manager.is_earlier(grantee, id) {
                         // Die
-                        self.release_all_locks(id);
                         println!("[!] Aborting {} by wait-die scheme.", id);
                         let sender = self.senders.get(&id).unwrap();
                         sender
                             .send(OpMessage::Abort)
                             .expect("Sender manager read error");
+                        self.release_all_locks(id);
                     }
                 }
             }
@@ -268,10 +265,7 @@ impl TransactionManager {
     pub fn handle_write(&mut self, id: TransactionId, key: String, value: String) {
         match self.alg {
             Protocol::Lock => {
-                let granted =
-                    self.lock_manager.has(id, &key) || self.lock_manager.request(id, &key);
-
-                if granted {
+                if self.has_lock(id, &key) {
                     self.storage_manager.write(&key, &value);
                     println!("[!] Wrote {} = {} by {}.", key, value, id);
                     let sender = self.senders.get(&id).unwrap();
@@ -289,9 +283,9 @@ impl TransactionManager {
     pub fn handle_commit(&mut self, id: TransactionId) {
         match self.alg {
             Protocol::Lock => {
-                self.release_all_locks(id);
                 self.commited += 1;
                 println!("[!] {} successfully commited.", id);
+                self.release_all_locks(id);
             }
             Protocol::Validation => {}
             Protocol::Timestamp => {}
@@ -303,8 +297,17 @@ impl TransactionManager {
         return self.last_id;
     }
 
+    fn has_lock(&mut self, id: TransactionId, key: &str) -> bool {
+        self.lock_manager.has(id, key) || self.lock_manager.request(id, key)
+    }
+
     fn release_all_locks(&mut self, id: TransactionId) {
         self.lock_manager.release_all(id);
+        self.handle_queued();
+    }
+
+    fn handle_queued(&mut self) {
+        todo!()
     }
 }
 
