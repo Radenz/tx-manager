@@ -1,4 +1,7 @@
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    vec,
+};
 
 use crate::{
     storage::util::Key,
@@ -48,10 +51,19 @@ impl LockManager {
 
     pub fn release_all(&mut self, id: TransactionId) {
         println!("[!] Releasing all locks granted to {}.", id);
-        self.locks.retain(|_, v| *v != id);
+        let mut keys = vec![];
+        for (key, value) in self.locks.iter() {
+            if value == &id {
+                keys.push(key.to_owned());
+            }
+        }
+
+        for key in keys.into_iter() {
+            self.release(key);
+        }
     }
 
-    pub fn release(&mut self, _: TransactionId, key: Key) {
+    fn release(&mut self, key: Key) {
         self.locks.remove(&key);
         self.try_grant(key);
     }
@@ -62,7 +74,7 @@ impl LockManager {
         let mut found = false;
 
         for (i, entry) in self.queue.iter().enumerate() {
-            if entry.1 == key {
+            if entry.1 == *key {
                 index = i;
                 id = entry.0;
                 found = true;
@@ -73,6 +85,7 @@ impl LockManager {
         if found {
             self.queue.remove(index as usize);
             self.granted.push_back(id);
+            println!("[!] Granted exclusive lock of {} to {}", key, id);
         }
     }
 
