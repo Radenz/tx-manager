@@ -1,3 +1,5 @@
+use regex::Regex;
+
 use crate::concurrent::{LockManager, Protocol, TimestampManager};
 use crate::storage::StorageManager;
 use std::sync::mpsc;
@@ -9,7 +11,7 @@ use std::{mem, thread, vec};
 pub type TransactionId = u32;
 type OpEntry = (u32, Op);
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Op {
     Read(String),
     Write(String, String),
@@ -52,7 +54,7 @@ impl Transaction {
         for op in ops.iter() {
             match op {
                 Op::Read(key) => self.read(key),
-                Op::Write(key, value) => self.write(key, value),
+                Op::Write(key, _) => self.write(key),
                 Op::Assign(key, value) => self.assign(key, value),
                 Op::Commit => self.commit(),
             }
@@ -82,7 +84,8 @@ impl Transaction {
         }
     }
 
-    pub fn write(&mut self, key: &str, value: &str) {
+    pub fn write(&mut self, key: &str) {
+        let value = self.frame.read(key).unwrap();
         self.sender
             .send((self.id, Op::Write(key.to_owned(), value.to_owned())))
             .unwrap();
@@ -106,6 +109,53 @@ impl Deref for Transaction {
     fn deref(&self) -> &Self::Target {
         &self.operations
     }
+}
+
+pub fn parse_ops(raw: &str) -> Vec<Op> {
+    let mut ops = Vec::new();
+
+    let multiline_regex = Regex::new(r"(\r?\n)+").unwrap();
+    let whitespaces_regex = Regex::new(r"\s+").unwrap();
+
+    let lines: Vec<&str> = multiline_regex.split(raw).collect();
+    let entries: Vec<Vec<&str>> = lines
+        .into_iter()
+        .map(|line| whitespaces_regex.split(line.trim()).collect())
+        .collect();
+
+    for entry in entries {
+        let len = entry.len();
+        if len == 0 {
+            continue;
+        }
+
+        let op = entry[0];
+
+        match op {
+            "W" | "w" | "Write" => {
+                if len == 2 {
+                    let key = entry[1];
+                    ops.push(Op::Write(key.to_owned(), String::new()));
+                }
+            }
+            "R" | "r" | "Read" => {
+                if len == 2 {
+                    let key = entry[1];
+                    ops.push(Op::Read(key.to_owned()));
+                }
+            }
+            "A" | "a" | "Assign" => {
+                if len == 3 {
+                    let key = entry[1];
+                    let value = entry[2];
+                    ops.push(Op::Assign(key.to_owned(), value.to_owned()));
+                }
+            }
+            _ => continue,
+        }
+    }
+
+    ops
 }
 
 pub struct TransactionManager {
@@ -209,8 +259,7 @@ impl TransactionManager {
             Protocol::Timestamp => {}
         }
 
-        todo!("Validate");
-        todo!("Check released lock")
+        todo!("Validate and check released lock")
     }
 
     pub fn generate_id(&mut self) -> TransactionId {
@@ -220,5 +269,59 @@ impl TransactionManager {
 
     fn release_all_locks(&mut self, id: TransactionId) {
         self.lock_manager.release_all(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tx::{parse_ops, Op};
+
+    #[test]
+    fn test_parse() {
+        let ops = parse_ops(
+            "
+                Below is an empty line. This line will not be parsed.
+
+                Correct read
+                R A
+                Read A
+                r A
+                Wrong read
+                R
+                R A B
+                Correct write
+                W B
+                w B
+                Write B
+                Wrong write
+                W 
+                W S abc
+                Correct assign
+                A C abc
+                a C abc
+                Assign C abc
+                Wrong assign
+                Assign M 
+                ",
+        );
+
+        let read_op = Op::Read(String::from("A"));
+        let write_op = Op::Write(String::from("B"), String::from(""));
+        let assign_op = Op::Assign(String::from("C"), String::from("abc"));
+
+        assert_eq!(ops.len(), 9);
+        assert_eq!(ops.get(0), Some(&read_op));
+        assert_eq!(ops.get(1), Some(&read_op));
+        assert_eq!(ops.get(2), Some(&read_op));
+
+        assert_eq!(ops.get(3), Some(&write_op));
+        assert_eq!(ops.get(4), Some(&write_op));
+        assert_eq!(ops.get(5), Some(&write_op));
+
+        assert_eq!(ops.get(6), Some(&assign_op));
+        assert_eq!(ops.get(7), Some(&assign_op));
+        assert_eq!(ops.get(8), Some(&assign_op));
+
+        assert_eq!(ops.get(9), None);
     }
 }
