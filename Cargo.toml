@@ -1,9 +1,11 @@
 [package]
-name = "concurrency-control"
+author = "Raden Rifqi Rahman"
+name = "tx-manager"
+about = "Basic transaction manager with concurrency control."
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 regex = "1.7.0"
+clap = {version = "4.0.24", features = ["derive"]}
