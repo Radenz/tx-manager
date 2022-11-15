@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    time::SystemTime,
     vec,
 };
 
@@ -36,12 +37,18 @@ impl LockManager {
         let key = key.to_owned();
 
         if self.locks.contains_key(&key) {
-            println!("[!] Queueing lock request of {} from {}.", key, id);
+            println!(
+                "[Lock Manager] Queueing lock request of {} from {}.",
+                key, id
+            );
             self.queue.push_back((id, key));
             return false;
         }
 
-        println!("[!] Granted exclusive lock of {} to {}.", key, id);
+        println!(
+            "[Lock Manager] Granted exclusive lock of {} to {}.",
+            key, id
+        );
 
         self.locks.insert(key, id);
         self.granted.push_back(id);
@@ -50,7 +57,7 @@ impl LockManager {
     }
 
     pub fn release_all(&mut self, id: TransactionId) {
-        println!("[!] Releasing all locks granted to {}.", id);
+        println!("[Lock Manager] Releasing all locks granted to {}.", id);
         let mut keys = vec![];
         for (key, value) in self.locks.iter() {
             if value == &id {
@@ -85,7 +92,7 @@ impl LockManager {
         if found {
             self.queue.remove(index as usize);
             self.granted.push_back(id);
-            println!("[!] Granted exclusive lock of {} to {}", key, id);
+            println!("[Lock Manager] Granted exclusive lock of {} to {}", key, id);
         }
     }
 
@@ -94,11 +101,37 @@ impl LockManager {
     }
 }
 
-pub struct TimestampManager {}
+pub struct TimestampManager {
+    arrivals: HashMap<TransactionId, SystemTime>,
+    validations: HashMap<TransactionId, SystemTime>,
+    finish: HashMap<TransactionId, SystemTime>,
+}
 
 impl TimestampManager {
     pub fn new() -> Self {
-        // unimplemented!()
-        Self {}
+        Self {
+            arrivals: HashMap::new(),
+            validations: HashMap::new(),
+            finish: HashMap::new(),
+        }
+    }
+
+    pub fn arrive(&mut self, id: TransactionId) {
+        self.arrivals.insert(id, SystemTime::now());
+    }
+
+    pub fn validate(&mut self, id: TransactionId) {
+        self.validations.insert(id, SystemTime::now());
+    }
+
+    pub fn finish(&mut self, id: TransactionId) {
+        self.finish.insert(id, SystemTime::now());
+    }
+
+    pub fn is_earlier(&self, lhs: TransactionId, rhs: TransactionId) -> bool {
+        let lhs_time = self.arrivals.get(&lhs).expect("Invalid transaction id");
+        let rhs_time = self.arrivals.get(&rhs).expect("Invalid transaction id");
+
+        lhs_time < rhs_time
     }
 }

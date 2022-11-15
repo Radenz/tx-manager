@@ -201,6 +201,7 @@ impl TransactionManager {
 
             self.senders.insert(id, tx);
 
+            self.ts_manager.arrive(id);
             self.pool.push(thread::spawn(move || {
                 Transaction::new(id, ops, sender, rx).exec();
             }));
