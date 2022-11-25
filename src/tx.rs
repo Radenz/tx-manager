@@ -1,7 +1,8 @@
 use regex::Regex;
 
 use crate::concurrent::{LockManager, Protocol, TimestampManager};
-use crate::storage::StorageManager;
+use crate::storage::{Log, StorageManager};
+use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::sync::mpsc;
 use std::sync::mpsc::{sync_channel, Receiver, Sender, SyncSender};
@@ -173,10 +174,13 @@ pub struct TransactionManager {
     commited: u32,
     alg: Protocol,
     pool: Vec<JoinHandle<()>>,
+    log: Vec<Log>,
+    op_queue: VecDeque<OpEntry>,
 }
 
 impl TransactionManager {
     pub fn new(storage_manager: StorageManager, alg: Protocol) -> Self {
+        // TODO: cap channel at 1 OpEntry
         let (sender, receiver) = sync_channel::<OpEntry>(mem::size_of::<OpEntry>() * 8);
 
         Self {
@@ -190,6 +194,8 @@ impl TransactionManager {
             commited: 0,
             alg,
             pool: vec![],
+            log: vec![],
+            op_queue: VecDeque::new(),
         }
     }
 
@@ -214,12 +220,7 @@ impl TransactionManager {
         while commited != self.last_id {
             let (id, op) = self.receiver.recv().expect("Receiver error");
 
-            match op {
-                Op::Read(key) => self.handle_read(id, key),
-                Op::Write(key, value) => self.handle_write(id, key, value),
-                Op::Commit => self.handle_commit(id),
-                _ => {}
-            }
+            self.handle(id, op);
 
             commited = self.commited;
         }
@@ -228,6 +229,15 @@ impl TransactionManager {
 
         for handle in pool.into_iter() {
             handle.join().unwrap();
+        }
+    }
+
+    pub fn handle(&mut self, id: TransactionId, op: Op) {
+        match op {
+            Op::Read(key) => self.handle_read(id, key),
+            Op::Write(key, value) => self.handle_write(id, key, value),
+            Op::Commit => self.handle_commit(id),
+            _ => {}
         }
     }
 
@@ -254,6 +264,9 @@ impl TransactionManager {
                             .send(OpMessage::Abort)
                             .expect("Sender manager read error");
                         self.release_all_locks(id);
+                    } else {
+                        // Wait
+                        self.op_queue.push_back((id, Op::Read(key)));
                     }
                 }
             }
@@ -263,6 +276,8 @@ impl TransactionManager {
     }
 
     pub fn handle_write(&mut self, id: TransactionId, key: String, value: String) {
+        let init_value = self.storage_manager.read(&key).unwrap().to_owned();
+
         match self.alg {
             Protocol::Lock => {
                 if self.has_lock(id, &key) {
@@ -273,11 +288,30 @@ impl TransactionManager {
                     sender
                         .send(OpMessage::Ok(value))
                         .expect("Sender manager read error");
+                } else {
+                    let grantee = self.lock_manager.get_grantee(&key);
+                    if self.ts_manager.is_earlier(grantee, id) {
+                        // Die
+                        println!("[!] Aborting {} by wait-die scheme.", id);
+                        // let sender = self.senders.get(&id).unwrap();
+                        // sender
+                        //     .send(OpMessage::Abort)
+                        //     .expect("Sender manager read error");
+                        self.release_all_locks(id);
+                    } else {
+                        // Wait
+                        self.op_queue.push_back((id, Op::Write(key, value)));
+                        return;
+                    }
                 }
             }
             Protocol::Validation => {}
             Protocol::Timestamp => {}
         }
+
+        let written_value = self.storage_manager.read(&key).unwrap().to_owned();
+        self.log
+            .push(Log::write(key).from(init_value).to(written_value).by(id));
     }
 
     pub fn handle_commit(&mut self, id: TransactionId) {
@@ -307,7 +341,22 @@ impl TransactionManager {
     }
 
     fn handle_queued(&mut self) {
-        todo!()
+        let granted = self.lock_manager.get_granted();
+        let mut entry_count = self.op_queue.len();
+        let mut index = 0;
+
+        while index < entry_count {
+            let entry = self.op_queue.get(index).unwrap();
+            let is_granted = granted.iter().position(|&id| id == entry.0).is_some();
+
+            if is_granted {
+                let (id, op) = self.op_queue.remove(index).unwrap();
+                self.handle(id, op);
+                entry_count -= 1;
+            } else {
+                index += 1;
+            }
+        }
     }
 }
 

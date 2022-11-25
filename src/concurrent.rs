@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    mem,
     time::SystemTime,
     vec,
 };
@@ -21,7 +22,7 @@ pub enum Protocol {
 pub struct LockManager {
     locks: HashMap<Key, TransactionId>,
     queue: VecDeque<(TransactionId, Key)>,
-    granted: VecDeque<TransactionId>,
+    granted: Vec<TransactionId>,
 }
 
 impl LockManager {
@@ -29,7 +30,7 @@ impl LockManager {
         Self {
             locks: HashMap::new(),
             queue: VecDeque::new(),
-            granted: VecDeque::new(),
+            granted: Vec::new(),
         }
     }
 
@@ -51,7 +52,7 @@ impl LockManager {
         );
 
         self.locks.insert(key, id);
-        self.granted.push_back(id);
+        self.granted.push(id);
 
         true
     }
@@ -91,7 +92,7 @@ impl LockManager {
 
         if found {
             self.queue.remove(index as usize);
-            self.granted.push_back(id);
+            self.granted.push(id);
             println!("[Lock Manager] Granted exclusive lock of {} to {}", key, id);
         }
     }
@@ -102,6 +103,10 @@ impl LockManager {
 
     pub fn get_grantee(&self, key: &str) -> TransactionId {
         *self.locks.get(key).unwrap_or(&0u32)
+    }
+
+    pub fn get_granted(&mut self) -> Vec<TransactionId> {
+        mem::take(&mut self.granted)
     }
 }
 
