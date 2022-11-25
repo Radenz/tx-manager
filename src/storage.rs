@@ -1,3 +1,5 @@
+use crate::tx::TransactionId;
+
 use self::util::{Key, Value};
 use regex::Regex;
 use std::collections::HashMap;
@@ -51,6 +53,44 @@ impl StorageManager {
         for (key, value) in entries.iter() {
             self.write(key.as_str(), value.as_str());
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct Log {
+    tx: TransactionId,
+    key: Key,
+    from: Value,
+    to: Value,
+}
+
+impl Log {
+    pub fn write(key: Key) -> Self {
+        Self {
+            tx: 0,
+            key,
+            from: String::default(),
+            to: String::default(),
+        }
+    }
+
+    pub fn from(self, value: Value) -> Self {
+        Self {
+            from: value,
+            ..self
+        }
+    }
+
+    pub fn to(self, value: Value) -> Self {
+        Self { to: value, ..self }
+    }
+
+    pub fn by(self, tx: TransactionId) -> Self {
+        Self { tx, ..self }
+    }
+
+    pub fn is_done_by(&self, tx: TransactionId) -> bool {
+        self.tx == tx
     }
 }
 
