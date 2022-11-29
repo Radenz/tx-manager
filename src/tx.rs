@@ -180,8 +180,7 @@ pub struct TransactionManager {
 
 impl TransactionManager {
     pub fn new(storage_manager: StorageManager, alg: Protocol) -> Self {
-        // TODO: cap channel at 1 OpEntry
-        let (sender, receiver) = sync_channel::<OpEntry>(mem::size_of::<OpEntry>() * 8);
+        let (sender, receiver) = sync_channel::<OpEntry>(mem::size_of::<OpEntry>());
 
         Self {
             lock_manager: LockManager::new(),
