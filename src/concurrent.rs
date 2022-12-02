@@ -71,7 +71,9 @@ impl LockManager {
         }
     }
 
-    fn release(&mut self, key: Key) {
+    pub fn release(&mut self, key: Key) {
+        println!("[Lock Manager] Releasing exclusive lock of {}.", key);
+
         self.locks.remove(&key);
         self.try_grant(key);
     }
