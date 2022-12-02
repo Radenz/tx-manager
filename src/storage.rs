@@ -92,6 +92,18 @@ impl Log {
     pub fn is_done_by(&self, tx: TransactionId) -> bool {
         self.tx == tx
     }
+
+    pub fn writer(&self) -> TransactionId {
+        self.tx
+    }
+
+    pub fn key(&self) -> &Key {
+        &self.key
+    }
+
+    pub fn initial_value(&self) -> &Value {
+        &self.from
+    }
 }
 
 #[cfg(test)]

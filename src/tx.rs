@@ -1,6 +1,7 @@
 use regex::Regex;
 
 use crate::concurrent::{LockManager, Protocol, TimestampManager};
+use crate::storage::util::Key;
 use crate::storage::{Log, StorageManager};
 use std::collections::VecDeque;
 use std::ffi::OsStr;
@@ -32,6 +33,7 @@ pub struct Transaction {
     frame: StorageManager,
     sender: SyncSender<OpEntry>,
     receiver: Receiver<OpMessage>,
+    aborted: bool,
 }
 
 impl Transaction {
@@ -47,6 +49,7 @@ impl Transaction {
             frame: StorageManager::new(),
             sender,
             receiver,
+            aborted: false,
         }
     }
 
@@ -60,14 +63,21 @@ impl Transaction {
                 Op::Assign(key, value) => self.assign(key, value),
                 Op::Commit => {}
             }
+
+            if self.aborted {
+                break;
+            }
         }
 
         self.operations = ops;
-        self.commit();
+
+        if !self.aborted {
+            self.commit();
+        }
     }
 
     pub fn abort(&mut self) {
-        unimplemented!()
+        self.aborted = true;
     }
 
     pub fn commit(&mut self) {
@@ -172,10 +182,13 @@ pub struct TransactionManager {
     receiver: Receiver<OpEntry>,
     senders: HashMap<u32, Sender<OpMessage>>,
     commited: u32,
+    aborted: u32,
     alg: Protocol,
     pool: Vec<JoinHandle<()>>,
     log: Vec<Log>,
     op_queue: VecDeque<OpEntry>,
+    active_writers: HashMap<Key, Vec<TransactionId>>,
+    commit_dependencies: HashMap<TransactionId, Vec<TransactionId>>,
 }
 
 impl TransactionManager {
@@ -191,10 +204,13 @@ impl TransactionManager {
             receiver,
             senders: HashMap::new(),
             commited: 0,
+            aborted: 0,
             alg,
             pool: vec![],
             log: vec![],
             op_queue: VecDeque::new(),
+            active_writers: HashMap::new(),
+            commit_dependencies: HashMap::new(),
         }
     }
 
@@ -214,14 +230,14 @@ impl TransactionManager {
     }
 
     pub fn run(&mut self) {
-        let mut commited = self.commited;
+        let mut finished = self.commited + self.aborted;
 
-        while commited != self.last_id {
+        while finished != self.last_id {
             let (id, op) = self.receiver.recv().expect("Receiver error");
 
             self.handle(id, op);
 
-            commited = self.commited;
+            finished = self.commited + self.aborted;
         }
 
         let pool = mem::replace(&mut self.pool, vec![]);
@@ -248,6 +264,29 @@ impl TransactionManager {
                     println!("[!] Read {} = {} for {}.", key, value, id);
 
                     let sender = self.senders.get(&id).unwrap();
+                    let active_writer = self.active_writers.get(&key);
+
+                    if !self.commit_dependencies.contains_key(&id) {
+                        self.commit_dependencies.insert(id, vec![]);
+                    }
+
+                    let dependecies = self
+                        .commit_dependencies
+                        .get_mut(&id)
+                        .expect("Dependencies should never be None.");
+
+                    if active_writer.is_some() {
+                        let active_writer = active_writer.unwrap();
+                        for writer_id in active_writer.iter() {
+                            if writer_id == &id {
+                                continue;
+                            }
+                            if !dependecies.contains(writer_id) {
+                                dependecies.push(*writer_id);
+                            }
+                        }
+                    }
+
                     sender
                         .send(OpMessage::Ok(value))
                         .expect("Sender manager read error");
@@ -262,7 +301,7 @@ impl TransactionManager {
                         sender
                             .send(OpMessage::Abort)
                             .expect("Sender manager read error");
-                        self.release_all_locks(id);
+                        self.handle_abort(id);
                     } else {
                         // Wait
                         self.op_queue.push_back((id, Op::Read(key)));
@@ -292,11 +331,11 @@ impl TransactionManager {
                     if self.ts_manager.is_earlier(grantee, id) {
                         // Die
                         println!("[!] Aborting {} by wait-die scheme.", id);
-                        // let sender = self.senders.get(&id).unwrap();
-                        // sender
-                        //     .send(OpMessage::Abort)
-                        //     .expect("Sender manager read error");
-                        self.release_all_locks(id);
+                        let sender = self.senders.get(&id).unwrap();
+                        sender
+                            .send(OpMessage::Abort)
+                            .expect("Sender manager read error");
+                        self.handle_abort(id);
                     } else {
                         // Wait
                         self.op_queue.push_back((id, Op::Write(key, value)));
@@ -309,6 +348,18 @@ impl TransactionManager {
         }
 
         let written_value = self.storage_manager.read(&key).unwrap().to_owned();
+
+        if !self.active_writers.contains_key(&key) {
+            self.active_writers.insert(key.clone(), Vec::new());
+        }
+        let active_writer = self
+            .active_writers
+            .get_mut(&key)
+            .expect("Active writer should never be None.");
+        if !active_writer.contains(&id) {
+            active_writer.push(id);
+        }
+
         self.log
             .push(Log::write(key).from(init_value).to(written_value).by(id));
     }
@@ -318,11 +369,66 @@ impl TransactionManager {
             Protocol::Lock => {
                 self.commited += 1;
                 println!("[!] {} successfully commited.", id);
+                self.remove_writer(id);
                 self.release_all_locks(id);
             }
             Protocol::Validation => {}
             Protocol::Timestamp => {}
         }
+    }
+
+    fn handle_abort(&mut self, id: TransactionId) {
+        let mut aborted_txs = vec![id];
+
+        loop {
+            let mut more_aborted_txs = vec![];
+            for id in aborted_txs.iter() {
+                let dependencies = self.commit_dependencies.get(id);
+                if dependencies.is_some() {
+                    for dependency in dependencies.unwrap().iter() {
+                        more_aborted_txs.push(*dependency);
+                    }
+                }
+            }
+
+            if more_aborted_txs.len() == 0 {
+                break;
+            }
+
+            for aborted_tx in more_aborted_txs.iter() {
+                if !aborted_txs.contains(aborted_tx) {
+                    aborted_txs.push(*aborted_tx);
+                }
+            }
+        }
+
+        for log in self.log.iter().rev() {
+            if aborted_txs.contains(&log.writer()) {
+                let key = log.key();
+                let value = log.initial_value();
+
+                println!("Rolling back {} to {}", key, value);
+
+                self.storage_manager.write(key, value);
+            }
+        }
+
+        for aborted_tx in aborted_txs.iter() {
+            println!("Aborted {}", aborted_tx);
+            self.remove_writer(*aborted_tx);
+            self.release_all_locks_unhandled(*aborted_tx);
+            self.lock_manager.remove(*aborted_tx);
+
+            let op_queue = mem::take(&mut self.op_queue);
+            self.op_queue = op_queue
+                .into_iter()
+                .filter(|(id, _)| id == aborted_tx)
+                .collect();
+
+            self.aborted += 1;
+        }
+
+        self.handle_queued();
     }
 
     pub fn generate_id(&mut self) -> TransactionId {
@@ -337,6 +443,19 @@ impl TransactionManager {
     fn release_all_locks(&mut self, id: TransactionId) {
         self.lock_manager.release_all(id);
         self.handle_queued();
+    }
+
+    fn release_all_locks_unhandled(&mut self, id: TransactionId) {
+        self.lock_manager.release_all(id);
+    }
+
+    fn remove_writer(&mut self, id: TransactionId) {
+        for (_, writer) in self.active_writers.iter_mut() {
+            let index = writer.iter().position(|writer_id| writer_id == &id);
+            if index.is_some() {
+                writer.remove(index.unwrap());
+            }
+        }
     }
 
     fn handle_queued(&mut self) {

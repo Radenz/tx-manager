@@ -108,6 +108,18 @@ impl LockManager {
     pub fn get_granted(&mut self) -> Vec<TransactionId> {
         mem::take(&mut self.granted)
     }
+
+    pub fn remove(&mut self, id: TransactionId) {
+        let queue = mem::take(&mut self.queue);
+        self.queue = queue
+            .into_iter()
+            .filter(|(tx_id, _)| tx_id != &id)
+            .collect();
+        let pos = self.granted.iter().position(|tx_id| tx_id == &id);
+        if pos.is_some() {
+            self.granted.remove(pos.unwrap());
+        }
+    }
 }
 
 pub struct TimestampManager {
