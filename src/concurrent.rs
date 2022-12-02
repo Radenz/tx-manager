@@ -157,4 +157,17 @@ impl TimestampManager {
 
         lhs_time < rhs_time
     }
+
+    pub fn finished(&self) -> &HashMap<TransactionId, SystemTime> {
+        &self.finish
+    }
+
+    pub fn finished_after_start_of(&self, lhs: TransactionId, rhs: TransactionId) -> bool {
+        let lhs_finish = self.finish.get(&lhs);
+        let rhs_start = self.arrivals.get(&rhs).expect("Invalid transaction id");
+        match lhs_finish {
+            None => false,
+            Some(finish) => finish > rhs_start,
+        }
+    }
 }

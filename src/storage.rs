@@ -6,8 +6,15 @@ use std::collections::HashMap;
 
 pub mod util;
 
+#[derive(Debug, Eq, Default)]
 pub struct StorageManager {
     storage: HashMap<Key, Value>,
+}
+
+impl PartialEq for StorageManager {
+    fn eq(&self, _: &StorageManager) -> bool {
+        true
+    }
 }
 
 impl StorageManager {
@@ -52,6 +59,12 @@ impl StorageManager {
     pub fn load(&mut self, entries: &HashMap<Key, Value>) {
         for (key, value) in entries.iter() {
             self.write(key.as_str(), value.as_str());
+        }
+    }
+
+    pub fn print(&self) {
+        for (key, value) in self.storage.iter() {
+            println!("{} = {}", key, value);
         }
     }
 }
