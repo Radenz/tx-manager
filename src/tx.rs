@@ -362,6 +362,7 @@ impl TransactionManager {
                     .to_owned();
                 let sender = self.senders.get(&id).unwrap();
                 let value = value.to_owned();
+                println!("[!] Read {} = {} for {}.", key, value, id);
 
                 sender
                     .send(OpMessage::Ok(value))
@@ -375,7 +376,7 @@ impl TransactionManager {
     }
 
     pub fn handle_write(&mut self, id: TransactionId, key: String, value: String) {
-        // let init_value = self.storage_manager.read(&key).unwrap().to_owned();
+        let init_value = self.storage_manager.read(&key).unwrap().to_owned();
 
         match self.alg {
             Protocol::Lock => {
@@ -404,6 +405,7 @@ impl TransactionManager {
                         return;
                     }
                 }
+                return;
             }
             Protocol::Validation => {
                 let sender = self.senders.get(&id).unwrap();
@@ -413,10 +415,28 @@ impl TransactionManager {
                 self.put_to_write_set(id, key);
                 return;
             }
-            Protocol::Timestamp => {}
+            Protocol::Timestamp => {
+                let tx_timestamp = self.ts_manager.get_arrival(&id);
+                let res =
+                    self.versioned_storage_manager
+                        .write(&key, id, *tx_timestamp, value.clone());
+
+                let sender = self.senders.get(&id).unwrap();
+                if res.is_err() {
+                    sender
+                        .send(OpMessage::Abort)
+                        .expect("Sender manager read error");
+                    self.handle_abort(id);
+                } else {
+                    sender
+                        .send(OpMessage::Ok(value))
+                        .expect("Sender manager read error");
+                    self.put_to_write_set(id, key.clone());
+                }
+            }
         }
 
-        // let written_value = self.storage_manager.read(&key).unwrap().to_owned();
+        let written_value = self.storage_manager.read(&key).unwrap().to_owned();
 
         // if !self.active_writers.contains_key(&key) {
         //     self.active_writers.insert(key.clone(), Vec::new());
@@ -435,8 +455,8 @@ impl TransactionManager {
         //     writer.push(id);
         // }
 
-        // self.log
-        //     .push(Log::write(key).from(init_value).to(written_value).by(id));
+        self.log
+            .push(Log::write(key).from(init_value).to(written_value).by(id));
     }
 
     pub fn handle_commit(&mut self, id: TransactionId, frame: StorageManager) {
@@ -483,7 +503,19 @@ impl TransactionManager {
                     self.handle_abort(id);
                 }
             }
-            Protocol::Timestamp => {}
+            Protocol::Timestamp => {
+                let write_set = self.write_sets.get(&id).unwrap();
+                for (key, value) in frame.iter() {
+                    if write_set.contains(key) {
+                        self.storage_manager.write(key, value);
+                        println!("[!] Wrote {} = {} by {}.", key, value, id);
+                    }
+                }
+
+                self.ts_manager.validate(id);
+                self.commited += 1;
+                println!("[!] {} successfully commited.", id);
+            }
         }
 
         self.ts_manager.finish(id);
@@ -491,58 +523,59 @@ impl TransactionManager {
 
     fn handle_abort(&mut self, id: TransactionId) {
         // TODO: clean up unused code
-        // let mut aborted_txs = vec![id];
+        let mut aborted_txs = vec![id];
 
-        // loop {
-        //     let mut more_aborted_txs = vec![];
-        //     for id in aborted_txs.iter() {
-        //         let dependencies = self.commit_dependencies.get(id);
-        //         if dependencies.is_some() {
-        //             for dependency in dependencies.unwrap().iter() {
-        //                 more_aborted_txs.push(*dependency);
-        //             }
-        //         }
-        //     }
+        loop {
+            let mut more_aborted_txs = vec![];
+            for id in aborted_txs.iter() {
+                let dependencies = self.commit_dependencies.get(id);
+                if dependencies.is_some() {
+                    for dependency in dependencies.unwrap().iter() {
+                        more_aborted_txs.push(*dependency);
+                    }
+                }
+            }
 
-        //     if more_aborted_txs.len() == 0 {
-        //         break;
-        //     }
+            if more_aborted_txs.len() == 0 {
+                break;
+            }
 
-        //     for aborted_tx in more_aborted_txs.iter() {
-        //         if !aborted_txs.contains(aborted_tx) {
-        //             aborted_txs.push(*aborted_tx);
-        //         }
-        //     }
-        // }
+            for aborted_tx in more_aborted_txs.iter() {
+                if !aborted_txs.contains(aborted_tx) {
+                    aborted_txs.push(*aborted_tx);
+                }
+            }
+        }
 
-        // for log in self.log.iter().rev() {
-        //     if aborted_txs.contains(&log.writer()) {
-        //         let key = log.key();
-        //         let value = log.initial_value();
+        for log in self.log.iter().rev() {
+            if aborted_txs.contains(&log.writer()) {
+                let key = log.key();
+                let value = log.initial_value();
 
-        //         println!("Rolling back {} to {}", key, value);
+                println!("Rolling back {} to {}", key, value);
 
-        //         self.storage_manager.write(key, value);
-        //     }
-        // }
+                self.storage_manager.write(key, value);
+            }
+        }
 
-        // for aborted_tx in aborted_txs.iter() {
-        //     self.remove_writer(*aborted_tx);
-        //     self.release_all_locks_unhandled(*aborted_tx);
-        //     self.lock_manager.remove(*aborted_tx);
+        for aborted_tx in aborted_txs.iter() {
+            // self.remove_writer(*aborted_tx);
+            // self.release_all_locks_unhandled(*aborted_tx);
+            // self.lock_manager.remove(*aborted_tx);
 
-        //     let op_queue = mem::take(&mut self.op_queue);
-        //     self.op_queue = op_queue
-        //         .into_iter()
-        //         .filter(|(id, _)| id == aborted_tx)
-        //         .collect();
+            // let op_queue = mem::take(&mut self.op_queue);
+            // self.op_queue = op_queue
+            //     .into_iter()
+            //     .filter(|(id, _)| id == aborted_tx)
+            //     .collect();
 
-        //     self.aborted += 1;
-        // }
+            println!("[!] Aborted {}.", aborted_tx);
+            self.aborted += 1;
+        }
 
         // self.handle_queued();
 
-        self.aborted += 1;
+        // self.aborted += 1;
     }
 
     fn add_commit_dependency(&mut self, dependant: TransactionId, dependency: TransactionId) {
@@ -561,8 +594,8 @@ impl TransactionManager {
         read_set.insert(key);
     }
 
-    fn put_to_write_set(&mut self, reader: TransactionId, key: Key) {
-        let write_set = self.write_sets.get_mut(&reader).unwrap();
+    fn put_to_write_set(&mut self, writer: TransactionId, key: Key) {
+        let write_set = self.write_sets.get_mut(&writer).unwrap();
         write_set.insert(key);
     }
 
