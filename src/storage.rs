@@ -115,13 +115,16 @@ impl VersionedStorageManager {
         value: Value,
     ) -> Result<(), ()> {
         let index = self.find_latest_version_index(key, tx_timestamp);
-        let (_, read_timestamp, _, _, _) = self.storage.get(index).unwrap();
+        let entry = self.storage.get_mut(index).unwrap();
+        let (_, read_timestamp, _, _, _) = entry;
         if *read_timestamp > tx_timestamp {
             return Err(());
+        } else if *read_timestamp < tx_timestamp {
+            self.storage
+                .push((key.to_owned(), tx_timestamp, writer_id, tx_timestamp, value));
+        } else {
+            entry.4 = value;
         }
-
-        self.storage
-            .push((key.to_owned(), tx_timestamp, writer_id, tx_timestamp, value));
 
         Ok(())
     }
