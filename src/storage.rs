@@ -101,7 +101,11 @@ impl VersionedStorageManager {
     pub fn read(&mut self, key: &str, tx_timestamp: Timestamp) -> (&Value, WriterId) {
         let index = self.find_latest_version_index(key, tx_timestamp);
         let entry = self.storage.get_mut(index).unwrap();
-        entry.1 = tx_timestamp;
+
+        if tx_timestamp > entry.1 {
+            entry.1 = tx_timestamp;
+        }
+
         let (_, _, writer_id, _, value) = entry;
 
         (value, *writer_id)
@@ -116,10 +120,12 @@ impl VersionedStorageManager {
     ) -> Result<(), ()> {
         let index = self.find_latest_version_index(key, tx_timestamp);
         let entry = self.storage.get_mut(index).unwrap();
-        let (_, read_timestamp, _, _, _) = entry;
+        let (_, read_timestamp, entry_writer_id, _, _) = entry;
         if *read_timestamp > tx_timestamp {
             return Err(());
-        } else if *read_timestamp < tx_timestamp {
+        }
+
+        if *entry_writer_id != writer_id {
             self.storage
                 .push((key.to_owned(), tx_timestamp, writer_id, tx_timestamp, value));
         } else {
