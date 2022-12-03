@@ -3,12 +3,12 @@ use regex::Regex;
 use crate::concurrent::{LockManager, Protocol, TimestampManager};
 use crate::storage::util::Key;
 use crate::storage::{Log, StorageManager, VersionedStorageManager};
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::sync::mpsc;
 use std::sync::mpsc::{sync_channel, Receiver, Sender, SyncSender};
 use std::thread::JoinHandle;
-use std::{collections::HashMap, ops::Deref};
 use std::{fs, mem, thread, vec};
 
 pub type TransactionId = u32;
@@ -115,14 +115,6 @@ impl Transaction {
 
     pub fn assign(&mut self, key: &str, value: &str) {
         self.frame.write(key, value);
-    }
-}
-
-impl Deref for Transaction {
-    type Target = Vec<Op>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.operations
     }
 }
 
