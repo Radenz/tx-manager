@@ -3,7 +3,7 @@ use regex::Regex;
 use crate::concurrent::{LockManager, Protocol, TimestampManager};
 use crate::storage::util::Key;
 use crate::storage::{Log, StorageManager, VersionedStorageManager};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::sync::mpsc;
 use std::sync::mpsc::{sync_channel, Receiver, Sender, SyncSender};
@@ -191,6 +191,8 @@ pub struct TransactionManager {
     active_writers: HashMap<Key, Vec<TransactionId>>,
     writers: HashMap<Key, Vec<TransactionId>>,
     readers: HashMap<TransactionId, Vec<Key>>,
+    read_sets: HashMap<TransactionId, HashSet<Key>>,
+    write_sets: HashMap<TransactionId, HashSet<Key>>,
     commit_dependencies: HashMap<TransactionId, Vec<TransactionId>>,
 }
 
@@ -217,6 +219,8 @@ impl TransactionManager {
             active_writers: HashMap::new(),
             writers: HashMap::new(),
             readers: HashMap::new(),
+            read_sets: HashMap::new(),
+            write_sets: HashMap::new(),
             commit_dependencies: HashMap::new(),
         }
     }
@@ -227,6 +231,8 @@ impl TransactionManager {
             let sender = self.remote_sender.clone();
             let (tx, rx) = mpsc::channel::<OpMessage>();
 
+            self.read_sets.insert(id, HashSet::new());
+            self.write_sets.insert(id, HashSet::new());
             self.senders.insert(id, tx);
 
             self.ts_manager.arrive(id);
@@ -338,40 +344,9 @@ impl TransactionManager {
                 let value = self.storage_manager.read(&key).unwrap().to_owned();
                 println!("[!] Read {} = {} for {}.", key, value, id);
 
+                self.put_to_read_set(id, key);
+
                 let sender = self.senders.get(&id).unwrap();
-                let active_writer = self.active_writers.get(&key);
-
-                if !self.commit_dependencies.contains_key(&id) {
-                    self.commit_dependencies.insert(id, vec![]);
-                }
-
-                let dependecies = self
-                    .commit_dependencies
-                    .get_mut(&id)
-                    .expect("Dependencies should never be None.");
-
-                if active_writer.is_some() {
-                    let active_writer = active_writer.unwrap();
-                    for writer_id in active_writer.iter() {
-                        if writer_id == &id {
-                            continue;
-                        }
-                        if !dependecies.contains(writer_id) {
-                            dependecies.push(*writer_id);
-                        }
-                    }
-                }
-
-                if !self.readers.contains_key(&id) {
-                    self.readers.insert(id, vec![]);
-                }
-                let reader = self
-                    .readers
-                    .get_mut(&id)
-                    .expect("Reader should never be None.");
-                if !reader.contains(&key) {
-                    reader.push(key);
-                }
 
                 sender
                     .send(OpMessage::Ok(value))
@@ -432,6 +407,8 @@ impl TransactionManager {
                 sender
                     .send(OpMessage::Ok(value))
                     .expect("Sender manager read error");
+                self.put_to_write_set(id, key);
+                return;
             }
             Protocol::Timestamp => {}
         }
@@ -470,37 +447,32 @@ impl TransactionManager {
             Protocol::Validation => {
                 println!("[!] Validating {}", id);
 
-                let read_keys = self.readers.get(&id).unwrap();
-                let mut writer_ids = vec![];
-
-                for key in read_keys.iter() {
-                    let default = vec![];
-                    let writers = self.writers.get(key).unwrap_or(&default);
-                    for writer in writers.iter() {
-                        writer_ids.push(*writer);
-                    }
-                }
-
                 let mut valid = true;
+                let read_set = self.read_sets.get(&id).unwrap();
+
                 for (finished_tx, _) in self.ts_manager.finished().iter() {
-                    if self.ts_manager.finished_after_start_of(*finished_tx, id)
-                        && writer_ids.contains(finished_tx)
-                    {
-                        valid = false;
-                        break;
+                    if self.ts_manager.finished_after_start_of(*finished_tx, id) {
+                        let write_set = self.write_sets.get(finished_tx).unwrap();
+
+                        if read_set.intersection(write_set).count() > 0 {
+                            valid = false;
+                            break;
+                        }
                     }
                 }
 
                 if valid {
                     println!("[!] Validation success.");
 
+                    let write_set = self.write_sets.get(&id).unwrap();
                     for (key, value) in frame.iter() {
-                        self.storage_manager.write(key, value);
-                        println!("[!] Wrote {} = {} by {}.", key, value, id);
+                        if write_set.contains(key) {
+                            self.storage_manager.write(key, value);
+                            println!("[!] Wrote {} = {} by {}.", key, value, id);
+                        }
                     }
 
                     self.ts_manager.validate(id);
-                    self.remove_writer(id);
                     self.commited += 1;
                     println!("[!] {} successfully commited.", id);
                 } else {
@@ -510,59 +482,64 @@ impl TransactionManager {
             }
             Protocol::Timestamp => {}
         }
+
+        self.ts_manager.finish(id);
     }
 
     fn handle_abort(&mut self, id: TransactionId) {
-        let mut aborted_txs = vec![id];
+        // TODO: clean up unused code
+        // let mut aborted_txs = vec![id];
 
-        loop {
-            let mut more_aborted_txs = vec![];
-            for id in aborted_txs.iter() {
-                let dependencies = self.commit_dependencies.get(id);
-                if dependencies.is_some() {
-                    for dependency in dependencies.unwrap().iter() {
-                        more_aborted_txs.push(*dependency);
-                    }
-                }
-            }
+        // loop {
+        //     let mut more_aborted_txs = vec![];
+        //     for id in aborted_txs.iter() {
+        //         let dependencies = self.commit_dependencies.get(id);
+        //         if dependencies.is_some() {
+        //             for dependency in dependencies.unwrap().iter() {
+        //                 more_aborted_txs.push(*dependency);
+        //             }
+        //         }
+        //     }
 
-            if more_aborted_txs.len() == 0 {
-                break;
-            }
+        //     if more_aborted_txs.len() == 0 {
+        //         break;
+        //     }
 
-            for aborted_tx in more_aborted_txs.iter() {
-                if !aborted_txs.contains(aborted_tx) {
-                    aborted_txs.push(*aborted_tx);
-                }
-            }
-        }
+        //     for aborted_tx in more_aborted_txs.iter() {
+        //         if !aborted_txs.contains(aborted_tx) {
+        //             aborted_txs.push(*aborted_tx);
+        //         }
+        //     }
+        // }
 
-        for log in self.log.iter().rev() {
-            if aborted_txs.contains(&log.writer()) {
-                let key = log.key();
-                let value = log.initial_value();
+        // for log in self.log.iter().rev() {
+        //     if aborted_txs.contains(&log.writer()) {
+        //         let key = log.key();
+        //         let value = log.initial_value();
 
-                println!("Rolling back {} to {}", key, value);
+        //         println!("Rolling back {} to {}", key, value);
 
-                self.storage_manager.write(key, value);
-            }
-        }
+        //         self.storage_manager.write(key, value);
+        //     }
+        // }
 
-        for aborted_tx in aborted_txs.iter() {
-            self.remove_writer(*aborted_tx);
-            self.release_all_locks_unhandled(*aborted_tx);
-            self.lock_manager.remove(*aborted_tx);
+        // for aborted_tx in aborted_txs.iter() {
+        //     self.remove_writer(*aborted_tx);
+        //     self.release_all_locks_unhandled(*aborted_tx);
+        //     self.lock_manager.remove(*aborted_tx);
 
-            let op_queue = mem::take(&mut self.op_queue);
-            self.op_queue = op_queue
-                .into_iter()
-                .filter(|(id, _)| id == aborted_tx)
-                .collect();
+        //     let op_queue = mem::take(&mut self.op_queue);
+        //     self.op_queue = op_queue
+        //         .into_iter()
+        //         .filter(|(id, _)| id == aborted_tx)
+        //         .collect();
 
-            self.aborted += 1;
-        }
+        //     self.aborted += 1;
+        // }
 
-        self.handle_queued();
+        // self.handle_queued();
+
+        self.aborted += 1;
     }
 
     fn add_commit_dependency(&mut self, dependant: TransactionId, dependency: TransactionId) {
@@ -574,6 +551,16 @@ impl TransactionManager {
                 .unwrap()
                 .push(dependency);
         }
+    }
+
+    fn put_to_read_set(&mut self, reader: TransactionId, key: Key) {
+        let read_set = self.read_sets.get_mut(&reader).unwrap();
+        read_set.insert(key);
+    }
+
+    fn put_to_write_set(&mut self, reader: TransactionId, key: Key) {
+        let write_set = self.write_sets.get_mut(&reader).unwrap();
+        write_set.insert(key);
     }
 
     pub fn generate_id(&mut self) -> TransactionId {
