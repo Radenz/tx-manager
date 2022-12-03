@@ -1,0 +1,4 @@
+Read C
+Read D
+Assign C Always
+Write C

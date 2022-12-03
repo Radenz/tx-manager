@@ -1,0 +1,3 @@
+Read B
+Assign A Always
+Write A

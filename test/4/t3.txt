@@ -1,0 +1,12 @@
+Read D
+Read E
+Assign D her
+Write D
+Write D
+Write D
+Write D
+Write D
+Read C
+Assign E nonsense
+Write C
+Write E

@@ -1,0 +1,4 @@
+Read D
+Read B
+Assign D her
+Write D

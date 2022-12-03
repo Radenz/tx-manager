@@ -1,0 +1,13 @@
+Read C
+Read D
+Assign C Always
+Assign A Sometimes
+Write C
+Write A
+Write A
+Write A
+Write A
+Write A
+Write A
+Assign D her
+Write D
