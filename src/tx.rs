@@ -266,7 +266,7 @@ impl TransactionManager {
         match op {
             Op::Read(key) => self.handle_read(id, key),
             Op::Write(key, value) => self.handle_write(id, key, value),
-            Op::Commit(_) => self.handle_commit(id),
+            Op::Commit(frame) => self.handle_commit(id, frame),
             _ => {}
         }
     }
@@ -459,7 +459,7 @@ impl TransactionManager {
             .push(Log::write(key).from(init_value).to(written_value).by(id));
     }
 
-    pub fn handle_commit(&mut self, id: TransactionId) {
+    pub fn handle_commit(&mut self, id: TransactionId, frame: StorageManager) {
         match self.alg {
             Protocol::Lock => {
                 self.commited += 1;
@@ -493,10 +493,16 @@ impl TransactionManager {
 
                 if valid {
                     println!("[!] Validation success.");
-                    println!("[!] {} successfully commited.", id);
+
+                    for (key, value) in frame.iter() {
+                        self.storage_manager.write(key, value);
+                        println!("[!] Wrote {} = {} by {}.", key, value, id);
+                    }
+
                     self.ts_manager.validate(id);
                     self.remove_writer(id);
                     self.commited += 1;
+                    println!("[!] {} successfully commited.", id);
                 } else {
                     println!("[!] Validation failed.");
                     self.handle_abort(id);

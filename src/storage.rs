@@ -2,7 +2,7 @@ use crate::tx::TransactionId;
 
 use self::util::{Key, Value};
 use regex::Regex;
-use std::{collections::HashMap, time::SystemTime};
+use std::{collections::HashMap, ops::Deref, time::SystemTime};
 
 pub mod util;
 
@@ -74,6 +74,14 @@ impl StorageManager {
     }
 }
 
+impl Deref for StorageManager {
+    type Target = HashMap<Key, Value>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.storage
+    }
+}
+
 pub struct VersionedStorageManager {
     storage: Vec<(Key, ReadTimestamp, WriterId, WriteTimestamp, Value)>,
 }
@@ -141,7 +149,7 @@ pub struct Log {
     tx: TransactionId,
     key: Key,
     from: Value,
-    to: Value,
+    _to: Value,
 }
 
 impl Log {
@@ -150,7 +158,7 @@ impl Log {
             tx: 0,
             key,
             from: String::default(),
-            to: String::default(),
+            _to: String::default(),
         }
     }
 
@@ -162,7 +170,7 @@ impl Log {
     }
 
     pub fn to(self, value: Value) -> Self {
-        Self { to: value, ..self }
+        Self { _to: value, ..self }
     }
 
     pub fn by(self, tx: TransactionId) -> Self {
