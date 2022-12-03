@@ -2,7 +2,7 @@ use regex::Regex;
 
 use crate::concurrent::{LockManager, Protocol, TimestampManager};
 use crate::storage::util::Key;
-use crate::storage::{Log, StorageManager};
+use crate::storage::{Log, StorageManager, VersionedStorageManager};
 use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::sync::mpsc;
@@ -177,6 +177,7 @@ pub struct TransactionManager {
     lock_manager: LockManager,
     ts_manager: TimestampManager,
     storage_manager: StorageManager,
+    versioned_storage_manager: VersionedStorageManager,
     last_id: TransactionId,
     remote_sender: SyncSender<OpEntry>,
     receiver: Receiver<OpEntry>,
@@ -196,11 +197,13 @@ pub struct TransactionManager {
 impl TransactionManager {
     pub fn new(storage_manager: StorageManager, alg: Protocol) -> Self {
         let (sender, receiver) = sync_channel::<OpEntry>(mem::size_of::<OpEntry>());
+        let versioned_storage_manager = VersionedStorageManager::new(&storage_manager);
 
         Self {
             lock_manager: LockManager::new(),
             ts_manager: TimestampManager::new(),
             storage_manager,
+            versioned_storage_manager,
             last_id: 0,
             remote_sender: sender,
             receiver,
@@ -374,7 +377,23 @@ impl TransactionManager {
                     .send(OpMessage::Ok(value))
                     .expect("Sender manager read error");
             }
-            Protocol::Timestamp => {}
+            Protocol::Timestamp => {
+                let tx_timestamp = self.ts_manager.get_arrival(&id);
+                let (value, last_writer_id) = self
+                    .versioned_storage_manager
+                    .read(&key, *tx_timestamp)
+                    .to_owned();
+                let sender = self.senders.get(&id).unwrap();
+                let value = value.to_owned();
+
+                sender
+                    .send(OpMessage::Ok(value))
+                    .expect("Sender manager read error");
+
+                if last_writer_id != 0 {
+                    self.add_commit_dependency(id, last_writer_id);
+                }
+            }
         }
     }
 
@@ -538,6 +557,17 @@ impl TransactionManager {
         }
 
         self.handle_queued();
+    }
+
+    fn add_commit_dependency(&mut self, dependant: TransactionId, dependency: TransactionId) {
+        if !self.commit_dependencies.contains_key(&dependant) {
+            self.commit_dependencies.insert(dependant, vec![dependency]);
+        } else {
+            self.commit_dependencies
+                .get_mut(&dependant)
+                .unwrap()
+                .push(dependency);
+        }
     }
 
     pub fn generate_id(&mut self) -> TransactionId {

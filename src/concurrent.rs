@@ -143,6 +143,10 @@ impl TimestampManager {
         self.arrivals.insert(id, SystemTime::now());
     }
 
+    pub fn get_arrival(&self, id: &TransactionId) -> &SystemTime {
+        self.arrivals.get(id).expect("Id should exists")
+    }
+
     pub fn validate(&mut self, id: TransactionId) {
         self.validations.insert(id, SystemTime::now());
     }

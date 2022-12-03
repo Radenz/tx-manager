@@ -2,9 +2,14 @@ use crate::tx::TransactionId;
 
 use self::util::{Key, Value};
 use regex::Regex;
-use std::collections::HashMap;
+use std::{collections::HashMap, time::SystemTime};
 
 pub mod util;
+
+type Timestamp = SystemTime;
+type ReadTimestamp = Timestamp;
+type WriteTimestamp = Timestamp;
+type WriterId = TransactionId;
 
 #[derive(Debug, Eq, Default)]
 pub struct StorageManager {
@@ -66,6 +71,68 @@ impl StorageManager {
         for (key, value) in self.storage.iter() {
             println!("{} = {}", key, value);
         }
+    }
+}
+
+pub struct VersionedStorageManager {
+    storage: Vec<(Key, ReadTimestamp, WriterId, WriteTimestamp, Value)>,
+}
+
+impl VersionedStorageManager {
+    pub fn new(storage_manager: &StorageManager) -> Self {
+        let mut storage = Vec::new();
+        let timestamp = SystemTime::now();
+
+        for (key, value) in storage_manager.storage.iter() {
+            storage.push((key.clone(), timestamp, 0, timestamp, value.clone()));
+        }
+
+        Self { storage }
+    }
+
+    pub fn read(&mut self, key: &str, tx_timestamp: Timestamp) -> (&Value, WriterId) {
+        let index = self.find_latest_version_index(key, tx_timestamp);
+        let entry = self.storage.get_mut(index).unwrap();
+        entry.1 = tx_timestamp;
+        let (_, _, writer_id, _, value) = entry;
+
+        (value, *writer_id)
+    }
+
+    pub fn write(
+        &mut self,
+        key: &str,
+        writer_id: TransactionId,
+        tx_timestamp: Timestamp,
+        value: Value,
+    ) -> Result<(), ()> {
+        let index = self.find_latest_version_index(key, tx_timestamp);
+        let (_, read_timestamp, _, _, _) = self.storage.get(index).unwrap();
+        if *read_timestamp > tx_timestamp {
+            return Err(());
+        }
+
+        self.storage
+            .push((key.to_owned(), tx_timestamp, writer_id, tx_timestamp, value));
+
+        Ok(())
+    }
+
+    fn find_latest_version_index(&mut self, key: &str, tx_timestamp: Timestamp) -> usize {
+        let mut index = self.storage.len();
+        let mut latest_timestamp = SystemTime::UNIX_EPOCH;
+
+        for (i, (entry_key, _, _, write_timestamp, _)) in self.storage.iter().enumerate() {
+            if key == entry_key
+                && latest_timestamp < *write_timestamp
+                && *write_timestamp < tx_timestamp
+            {
+                index = i;
+                latest_timestamp = *write_timestamp;
+            }
+        }
+
+        index
     }
 }
 
