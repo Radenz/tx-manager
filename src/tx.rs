@@ -349,7 +349,7 @@ impl TransactionManager {
                         .write(&key, id, *tx_timestamp, value.clone());
 
                 if res.is_err() {
-                    self.handle_abort(id);
+                    self.handle_abort(id, true);
                 } else {
                     let sender = self.senders.get(&id).unwrap();
                     sender
@@ -405,7 +405,7 @@ impl TransactionManager {
                     println!("[!] {} successfully commited.", id);
                 } else {
                     println!("[!] Validation failed.");
-                    self.handle_abort(id);
+                    self.handle_abort(id, false);
                 }
             }
             Protocol::Timestamp => {
@@ -426,7 +426,7 @@ impl TransactionManager {
         self.ts_manager.finish(id);
     }
 
-    fn handle_abort(&mut self, id: TransactionId) {
+    fn handle_abort(&mut self, id: TransactionId, with_send: bool) {
         let mut aborted_txs = HashSet::from([id]);
 
         loop {
@@ -463,10 +463,12 @@ impl TransactionManager {
         }
 
         for aborted_tx in aborted_txs.iter() {
-            let sender = self.senders.get(&aborted_tx).unwrap();
-            sender
-                .send(OpMessage::Abort)
-                .expect("Sender manager read error");
+            if with_send {
+                let sender = self.senders.get(&aborted_tx).unwrap();
+                sender
+                    .send(OpMessage::Abort)
+                    .expect("Sender manager read error");
+            }
 
             println!("[!] Aborted {}.", aborted_tx);
             self.aborted += 1;
