@@ -421,13 +421,10 @@ impl TransactionManager {
                     self.versioned_storage_manager
                         .write(&key, id, *tx_timestamp, value.clone());
 
-                let sender = self.senders.get(&id).unwrap();
                 if res.is_err() {
-                    sender
-                        .send(OpMessage::Abort)
-                        .expect("Sender manager read error");
                     self.handle_abort(id);
                 } else {
+                    let sender = self.senders.get(&id).unwrap();
                     sender
                         .send(OpMessage::Ok(value))
                         .expect("Sender manager read error");
@@ -523,7 +520,7 @@ impl TransactionManager {
 
     fn handle_abort(&mut self, id: TransactionId) {
         // TODO: clean up unused code
-        let mut aborted_txs = vec![id];
+        let mut aborted_txs = HashSet::from([id]);
 
         loop {
             let mut more_aborted_txs = vec![];
@@ -531,7 +528,9 @@ impl TransactionManager {
                 let dependencies = self.commit_dependencies.get(id);
                 if dependencies.is_some() {
                     for dependency in dependencies.unwrap().iter() {
-                        more_aborted_txs.push(*dependency);
+                        if !aborted_txs.contains(dependency) {
+                            more_aborted_txs.push(*dependency);
+                        }
                     }
                 }
             }
@@ -541,9 +540,7 @@ impl TransactionManager {
             }
 
             for aborted_tx in more_aborted_txs.iter() {
-                if !aborted_txs.contains(aborted_tx) {
-                    aborted_txs.push(*aborted_tx);
-                }
+                aborted_txs.insert(*aborted_tx);
             }
         }
 
@@ -568,6 +565,10 @@ impl TransactionManager {
             //     .into_iter()
             //     .filter(|(id, _)| id == aborted_tx)
             //     .collect();
+            let sender = self.senders.get(&aborted_tx).unwrap();
+            sender
+                .send(OpMessage::Abort)
+                .expect("Sender manager read error");
 
             println!("[!] Aborted {}.", aborted_tx);
             self.aborted += 1;
@@ -579,13 +580,13 @@ impl TransactionManager {
     }
 
     fn add_commit_dependency(&mut self, dependant: TransactionId, dependency: TransactionId) {
-        if !self.commit_dependencies.contains_key(&dependant) {
-            self.commit_dependencies.insert(dependant, vec![dependency]);
+        if !self.commit_dependencies.contains_key(&dependency) {
+            self.commit_dependencies.insert(dependency, vec![dependant]);
         } else {
             self.commit_dependencies
-                .get_mut(&dependant)
+                .get_mut(&dependency)
                 .unwrap()
-                .push(dependency);
+                .push(dependant);
         }
     }
 
