@@ -60,13 +60,15 @@ to `World` in the storage, while the other lines are ignored.
 Similar to the initialization file, the transaction definition file
 consists of lines with non-whitespace-containing strings separated by
 spaces. There are 3 available instructions that can be executed within
-a transaction: `Read`, `Write`, and `Assign`. The `Read` instruction
-allows you to read the value of a data with a specific key from the
-database storage and bring it to the transaction context. The `Write`
-instruction allows you to write the value of a data with a specific key
-in the transaction context to the database storage (make sure it
-is available in the context, otherwise the program may panic). The
-`Assign` instruction allows you to assign a value to a specific key
+a transaction: `Read`, `Write`, and `Assign`.
+- The `Read` instruction allows you to read the value of a data with
+a specific key from the database storage and bring it to the transaction
+context.
+- The `Write` instruction allows you to write the value of a data with
+a specific key in the transaction context to the database storage
+(do make sure it is available in the context, otherwise the program may
+panic).
+- The `Assign` instruction allows you to assign a value to a specific key
 in the transaction context with a specific value (doesn't need to be
 initialized/read from the storage first).
 To write your own transaction, you may arrange multiple instructions
