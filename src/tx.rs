@@ -285,43 +285,45 @@ impl TransactionManager {
                     println!("[!] Read {} = {} for {}.", key, value, id);
 
                     let sender = self.senders.get(&id).unwrap();
-                    let active_writer = self.active_writers.get(&key);
+                    // let active_writer = self.active_writers.get(&key);
 
-                    if !self.commit_dependencies.contains_key(&id) {
-                        self.commit_dependencies.insert(id, vec![]);
-                    }
+                    // if !self.commit_dependencies.contains_key(&id) {
+                    //     self.commit_dependencies.insert(id, vec![]);
+                    // }
 
-                    let dependecies = self
-                        .commit_dependencies
-                        .get_mut(&id)
-                        .expect("Dependencies should never be None.");
+                    // let dependecies = self
+                    //     .commit_dependencies
+                    //     .get_mut(&id)
+                    //     .expect("Dependencies should never be None.");
 
-                    if active_writer.is_some() {
-                        let active_writer = active_writer.unwrap();
-                        for writer_id in active_writer.iter() {
-                            if writer_id == &id {
-                                continue;
-                            }
-                            if !dependecies.contains(writer_id) {
-                                dependecies.push(*writer_id);
-                            }
-                        }
-                    }
+                    // if active_writer.is_some() {
+                    //     let active_writer = active_writer.unwrap();
+                    //     for writer_id in active_writer.iter() {
+                    //         if writer_id == &id {
+                    //             continue;
+                    //         }
+                    //         if !dependecies.contains(writer_id) {
+                    //             dependecies.push(*writer_id);
+                    //         }
+                    //     }
+                    // }
 
-                    if !self.readers.contains_key(&id) {
-                        self.readers.insert(id, vec![]);
-                    }
-                    let reader = self
-                        .readers
-                        .get_mut(&id)
-                        .expect("Reader should never be None.");
-                    if !reader.contains(&key) {
-                        reader.push(key);
-                    }
+                    // if !self.readers.contains_key(&id) {
+                    //     self.readers.insert(id, vec![]);
+                    // }
+                    // let reader = self
+                    //     .readers
+                    //     .get_mut(&id)
+                    //     .expect("Reader should never be None.");
+                    // if !reader.contains(&key) {
+                    //     reader.push(key);
+                    // }
 
                     sender
                         .send(OpMessage::Ok(value))
                         .expect("Sender manager read error");
+
+                    self.lock_manager.release(key);
                 } else {
                     // Wait-die scheme
 
@@ -373,7 +375,7 @@ impl TransactionManager {
     }
 
     pub fn handle_write(&mut self, id: TransactionId, key: String, value: String) {
-        let init_value = self.storage_manager.read(&key).unwrap().to_owned();
+        // let init_value = self.storage_manager.read(&key).unwrap().to_owned();
 
         match self.alg {
             Protocol::Lock => {
@@ -385,6 +387,7 @@ impl TransactionManager {
                     sender
                         .send(OpMessage::Ok(value))
                         .expect("Sender manager read error");
+                    self.lock_manager.release(key);
                 } else {
                     let grantee = self.lock_manager.get_grantee(&key);
                     if self.ts_manager.is_earlier(grantee, id) {
@@ -413,27 +416,27 @@ impl TransactionManager {
             Protocol::Timestamp => {}
         }
 
-        let written_value = self.storage_manager.read(&key).unwrap().to_owned();
+        // let written_value = self.storage_manager.read(&key).unwrap().to_owned();
 
-        if !self.active_writers.contains_key(&key) {
-            self.active_writers.insert(key.clone(), Vec::new());
-            self.writers.insert(key.clone(), Vec::new());
-        }
-        let active_writer = self
-            .active_writers
-            .get_mut(&key)
-            .expect("Active writer should never be None.");
-        let writer = self
-            .writers
-            .get_mut(&key)
-            .expect("Writer should never be None.");
-        if !active_writer.contains(&id) {
-            active_writer.push(id);
-            writer.push(id);
-        }
+        // if !self.active_writers.contains_key(&key) {
+        //     self.active_writers.insert(key.clone(), Vec::new());
+        //     self.writers.insert(key.clone(), Vec::new());
+        // }
+        // let active_writer = self
+        //     .active_writers
+        //     .get_mut(&key)
+        //     .expect("Active writer should never be None.");
+        // let writer = self
+        //     .writers
+        //     .get_mut(&key)
+        //     .expect("Writer should never be None.");
+        // if !active_writer.contains(&id) {
+        //     active_writer.push(id);
+        //     writer.push(id);
+        // }
 
-        self.log
-            .push(Log::write(key).from(init_value).to(written_value).by(id));
+        // self.log
+        //     .push(Log::write(key).from(init_value).to(written_value).by(id));
     }
 
     pub fn handle_commit(&mut self, id: TransactionId, frame: StorageManager) {
@@ -441,8 +444,8 @@ impl TransactionManager {
             Protocol::Lock => {
                 self.commited += 1;
                 println!("[!] {} successfully commited.", id);
-                self.remove_writer(id);
-                self.release_all_locks(id);
+                // self.remove_writer(id);
+                // self.release_all_locks(id);
             }
             Protocol::Validation => {
                 println!("[!] Validating {}", id);

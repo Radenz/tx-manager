@@ -72,7 +72,11 @@ impl LockManager {
     }
 
     pub fn release(&mut self, key: Key) {
-        println!("[Lock Manager] Releasing exclusive lock of {}.", key);
+        let lock_holder = self.locks.get(&key).unwrap();
+        println!(
+            "[Lock Manager] Releasing exclusive lock of {} from {}.",
+            key, lock_holder
+        );
 
         self.locks.remove(&key);
         self.try_grant(key);
