@@ -378,6 +378,7 @@ impl TransactionManager {
 
                 if res.is_err() {
                     self.handle_abort(id, true);
+                    self.versioned_storage_manager.remove(id);
                 } else {
                     let sender = self.senders.get(&id).unwrap();
                     sender

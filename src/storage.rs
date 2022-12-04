@@ -1,7 +1,7 @@
-use crate::tx::TransactionId;
-
 use self::util::{Key, Value};
+use crate::tx::TransactionId;
 use regex::Regex;
+use std::mem;
 use std::{collections::HashMap, ops::Deref, time::SystemTime};
 
 pub mod util;
@@ -133,6 +133,14 @@ impl VersionedStorageManager {
         }
 
         Ok(())
+    }
+
+    pub fn remove(&mut self, aborted_id: TransactionId) {
+        let storage = mem::take(&mut self.storage);
+        self.storage = storage
+            .into_iter()
+            .filter(|(_, _, writer_id, _, _)| *writer_id != aborted_id)
+            .collect();
     }
 
     fn find_latest_version_index(&mut self, key: &str, tx_timestamp: Timestamp) -> usize {
