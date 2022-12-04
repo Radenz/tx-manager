@@ -9,7 +9,7 @@ use tx_manager::{
 fn main() {
     let cli = Cli::parse();
     let protocol = cli.protocol.into();
-    let (mut sm, tx_ops) = parse_dir(cli.dir);
+    let (mut sm, tx_ops, names) = parse_dir(cli.dir);
 
     if sm.is_none() {
         println!("Warning: init.txt is missing. Intializing empty storage...");
@@ -20,7 +20,7 @@ fn main() {
 
     let mut tx_manager = TransactionManager::new(sm, protocol);
 
-    tx_manager.exec(tx_ops);
+    tx_manager.exec(tx_ops, names);
     tx_manager.run();
 }
 
