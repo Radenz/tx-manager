@@ -161,56 +161,6 @@ impl VersionedStorageManager {
     }
 }
 
-#[derive(Debug)]
-pub struct Log {
-    tx: TransactionId,
-    key: Key,
-    from: Value,
-    _to: Value,
-}
-
-impl Log {
-    pub fn write(key: Key) -> Self {
-        Self {
-            tx: 0,
-            key,
-            from: String::default(),
-            _to: String::default(),
-        }
-    }
-
-    pub fn from(self, value: Value) -> Self {
-        Self {
-            from: value,
-            ..self
-        }
-    }
-
-    pub fn to(self, value: Value) -> Self {
-        Self { _to: value, ..self }
-    }
-
-    pub fn by(self, tx: TransactionId) -> Self {
-        Self { tx, ..self }
-    }
-
-    pub fn is_done_by(&self, tx: TransactionId) -> bool {
-        self.tx == tx
-    }
-
-    pub fn writer(&self) -> TransactionId {
-        self.tx
-    }
-
-    pub fn key(&self) -> &Key {
-        &self.key
-    }
-
-    pub fn initial_value(&self) -> &Value {
-        &self.from
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::storage::util::{Key, Value};

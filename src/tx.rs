@@ -2,7 +2,7 @@ use regex::Regex;
 
 use crate::concurrent::{LockManager, Protocol, TimestampManager};
 use crate::storage::util::Key;
-use crate::storage::{Log, StorageManager, VersionedStorageManager};
+use crate::storage::{StorageManager, VersionedStorageManager};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -180,7 +180,6 @@ pub struct TransactionManager {
     commited_txs: HashSet<TransactionId>,
     alg: Protocol,
     pool: Vec<JoinHandle<()>>,
-    log: Vec<Log>,
     read_sets: HashMap<TransactionId, HashSet<Key>>,
     write_sets: HashMap<TransactionId, HashSet<Key>>,
     commit_dependencies: HashMap<TransactionId, Vec<TransactionId>>,
@@ -208,7 +207,6 @@ impl TransactionManager {
             commited_txs: HashSet::new(),
             alg,
             pool: vec![],
-            log: vec![],
             read_sets: HashMap::new(),
             write_sets: HashMap::new(),
             commit_dependencies: HashMap::new(),
@@ -345,8 +343,6 @@ impl TransactionManager {
     }
 
     pub fn handle_write(&mut self, id: TransactionId, key: String, value: String) {
-        let init_value = self.storage_manager.read(&key).unwrap().to_owned();
-
         match self.alg {
             Protocol::Lock => {
                 if self.has_lock(id, &key) {
@@ -388,11 +384,6 @@ impl TransactionManager {
                 }
             }
         }
-
-        let written_value = self.storage_manager.read(&key).unwrap().to_owned();
-
-        self.log
-            .push(Log::write(key).from(init_value).to(written_value).by(id));
     }
 
     pub fn handle_commit(&mut self, id: TransactionId, frame: StorageManager) {
@@ -536,17 +527,6 @@ impl TransactionManager {
 
             for aborted_tx in more_aborted_txs.iter() {
                 aborted_txs.insert(*aborted_tx);
-            }
-        }
-
-        for log in self.log.iter().rev() {
-            if aborted_txs.contains(&log.writer()) {
-                let key = log.key();
-                let value = log.initial_value();
-
-                println!("\x1b[1;91m[-]\x1b[0m Rolling back {} to {}", key, value);
-
-                self.storage_manager.write(key, value);
             }
         }
 
