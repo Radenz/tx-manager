@@ -1,7 +1,7 @@
 Read D
 Read E
 Assign E nonsense
-Write E
 Read C
+Write E
 Assign D her
 Write D
