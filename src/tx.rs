@@ -185,6 +185,7 @@ pub struct TransactionManager {
     write_sets: HashMap<TransactionId, HashSet<Key>>,
     commit_dependencies: HashMap<TransactionId, Vec<TransactionId>>,
     names: HashMap<TransactionId, String>,
+    commit_queue: Vec<(TransactionId, StorageManager)>,
 }
 
 impl TransactionManager {
@@ -212,6 +213,7 @@ impl TransactionManager {
             write_sets: HashMap::new(),
             commit_dependencies: HashMap::new(),
             names: HashMap::new(),
+            commit_queue: vec![],
         }
     }
 
@@ -441,22 +443,74 @@ impl TransactionManager {
                 }
             }
             Protocol::Timestamp => {
-                let write_set = self.write_sets.get(&id).unwrap();
-                for (key, value) in frame.iter() {
-                    if write_set.contains(key) {
-                        self.storage_manager.write(key, value);
-                        self.print_write(key, value, id);
-                    }
-                }
-
-                self.ts_manager.validate(id);
-                self.commited += 1;
-                self.print_commit(id);
-                self.commited_txs.insert(id);
+                self.try_commit(id, frame);
             }
         }
 
         self.ts_manager.finish(id);
+    }
+
+    fn try_commit(&mut self, id: TransactionId, frame: StorageManager) {
+        if self.has_commit_dependencies(id) {
+            if self
+                .commit_queue
+                .iter()
+                .position(|(tx_id, _)| *tx_id == id)
+                .is_none()
+            {
+                println!("\x1b[1;93m[-]\x1b[0m \x1b[93mDeferring commit of {} because of dependencies.\x1b[0m", self.get_name(id));
+                self.commit_queue.push((id, frame));
+            }
+            return;
+        }
+
+        let write_set = self.write_sets.get(&id).unwrap();
+        for (key, value) in frame.iter() {
+            if write_set.contains(key) {
+                self.storage_manager.write(key, value);
+                self.print_write(key, value, id);
+            }
+        }
+
+        self.ts_manager.validate(id);
+        self.commited += 1;
+        self.print_commit(id);
+        self.commited_txs.insert(id);
+
+        if let Some(commit_queue_index) =
+            self.commit_queue.iter().position(|(tx_id, _)| *tx_id == id)
+        {
+            // Remove from commit queue
+            self.commit_queue.remove(commit_queue_index);
+        }
+
+        // Try commit dependants
+        let mut try_commit_list = vec![];
+        if let Some(dependants) = self.commit_dependencies.get(&id) {
+            for dependant in dependants.iter() {
+                if let Some(commit_queue_index) = self
+                    .commit_queue
+                    .iter()
+                    .position(|(tx_id, _)| tx_id == dependant)
+                {
+                    try_commit_list.push(self.commit_queue.remove(commit_queue_index));
+                }
+            }
+        }
+
+        for (id, frame) in try_commit_list.into_iter() {
+            self.try_commit(id, frame);
+        }
+    }
+
+    fn has_commit_dependencies(&self, id: TransactionId) -> bool {
+        for (dependency, dependants) in self.commit_dependencies.iter() {
+            if !self.commited_txs.contains(&dependency) && dependants.contains(&id) {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn handle_abort(&mut self, id: TransactionId, with_send: bool) {
