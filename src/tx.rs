@@ -3,8 +3,8 @@ use regex::Regex;
 use crate::concurrent::{LockManager, Protocol, TimestampManager};
 use crate::storage::util::Key;
 use crate::storage::{Log, StorageManager, VersionedStorageManager};
+use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::{HashMap, VecDeque};
 use std::ffi::OsStr;
 use std::sync::mpsc;
 use std::sync::mpsc::{sync_channel, Receiver, Sender, SyncSender};
@@ -231,10 +231,12 @@ impl TransactionManager {
     }
 
     pub fn run(&mut self) {
-        println!("Initial storage");
+        println!("\x1b[1;96m[INITIALIZATION]\x1b[0m");
+        println!("\x1b[1;34m[?]\x1b[0m Initial storage");
         self.storage_manager.print();
         println!();
 
+        println!("\x1b[1;96m[EXECUTION]\x1b[0m");
         let mut finished = self.commited + self.aborted;
 
         while finished != self.last_id {
@@ -251,7 +253,11 @@ impl TransactionManager {
             handle.join().unwrap();
         }
 
-        println!("Storage after all transactions commited/aborted");
+        println!();
+        println!("\x1b[1;96m[SUMMARY]\x1b[0m");
+        println!(
+            "\x1b[1;34m[?]\x1b[0m \x1b[34mStorage after all transactions commited/aborted\x1b[0m"
+        );
         self.storage_manager.print();
         println!();
     }
@@ -270,7 +276,7 @@ impl TransactionManager {
             Protocol::Lock => {
                 if self.has_lock(id, &key) {
                     let value = self.storage_manager.read(&key).unwrap().to_owned();
-                    println!("[!] Read {} = {} for {}.", key, value, self.get_name(id));
+                    self.print_read(&key, &value, id);
 
                     let sender = self.senders.get(&id).unwrap();
                     sender
@@ -282,8 +288,7 @@ impl TransactionManager {
             }
             Protocol::Validation => {
                 let value = self.storage_manager.read(&key).unwrap().to_owned();
-                println!("[!] Read {} = {} for {}.", key, value, self.get_name(id));
-
+                self.print_read(&key, &value, id);
                 self.put_to_read_set(id, key);
 
                 let sender = self.senders.get(&id).unwrap();
@@ -300,7 +305,7 @@ impl TransactionManager {
                     .to_owned();
                 let sender = self.senders.get(&id).unwrap();
                 let value = value.to_owned();
-                println!("[!] Read {} = {} for {}.", key, value, self.get_name(id));
+                self.print_read(&key, &value, id);
 
                 sender
                     .send(OpMessage::Ok(value))
@@ -320,7 +325,7 @@ impl TransactionManager {
             Protocol::Lock => {
                 if self.has_lock(id, &key) {
                     self.storage_manager.write(&key, &value);
-                    println!("[!] Wrote {} = {} by {}.", key, value, self.get_name(id));
+                    self.print_write(&key, &value, id);
                     let sender = self.senders.get(&id).unwrap();
 
                     sender
@@ -336,6 +341,7 @@ impl TransactionManager {
                     .send(OpMessage::Ok(value))
                     .expect("Sender manager read error");
                 self.put_to_write_set(id, key);
+
                 return;
             }
             Protocol::Timestamp => {
@@ -366,10 +372,13 @@ impl TransactionManager {
         match self.alg {
             Protocol::Lock => {
                 self.commited += 1;
-                println!("[!] {} successfully commited.", self.get_name(id));
+                println!(
+                    "\x1b[1;92m[+]\x1b[0m {} successfully commited.",
+                    self.get_name(id)
+                );
             }
             Protocol::Validation => {
-                println!("[!] Validating {}", self.get_name(id));
+                println!("\x1b[1;34m[?]\x1b[0m Validating {}", self.get_name(id));
 
                 let mut valid = true;
                 let read_set = self.read_sets.get(&id).unwrap();
@@ -386,21 +395,21 @@ impl TransactionManager {
                 }
 
                 if valid {
-                    println!("[!] Validation success.");
+                    println!("\x1b[1;92m[!]\x1b[0m Validation success.");
 
                     let write_set = self.write_sets.get(&id).unwrap();
                     for (key, value) in frame.iter() {
                         if write_set.contains(key) {
                             self.storage_manager.write(key, value);
-                            println!("[!] Wrote {} = {} by {}.", key, value, self.get_name(id));
+                            self.print_write(key, value, id);
                         }
                     }
 
                     self.ts_manager.validate(id);
                     self.commited += 1;
-                    println!("[!] {} successfully commited.", self.get_name(id));
+                    self.print_commit(id);
                 } else {
-                    println!("[!] Validation failed.");
+                    println!("\x1b[1;91m[-]\x1b[0m Validation failed.");
                     self.handle_abort(id, false);
                 }
             }
@@ -409,13 +418,13 @@ impl TransactionManager {
                 for (key, value) in frame.iter() {
                     if write_set.contains(key) {
                         self.storage_manager.write(key, value);
-                        println!("[!] Wrote {} = {} by {}.", key, value, self.get_name(id));
+                        self.print_write(key, value, id);
                     }
                 }
 
                 self.ts_manager.validate(id);
                 self.commited += 1;
-                println!("[!] {} successfully commited.", self.get_name(id));
+                self.print_commit(id);
             }
         }
 
@@ -452,7 +461,7 @@ impl TransactionManager {
                 let key = log.key();
                 let value = log.initial_value();
 
-                println!("Rolling back {} to {}", key, value);
+                println!("\x1b[1;91m[-]\x1b[0m Rolling back {} to {}", key, value);
 
                 self.storage_manager.write(key, value);
             }
@@ -466,7 +475,7 @@ impl TransactionManager {
                     .expect("Sender manager read error");
             }
 
-            println!("[!] Aborted {}.", self.get_name(*aborted_tx));
+            self.print_abort(*aborted_tx);
             self.aborted += 1;
         }
     }
@@ -503,6 +512,38 @@ impl TransactionManager {
 
     fn get_name(&self, id: TransactionId) -> &String {
         self.names.get(&id).unwrap()
+    }
+
+    fn print_read(&self, key: &str, value: &str, id: TransactionId) {
+        println!(
+            "\x1b[1;93m[-]\x1b[0m \x1b[93mRead {} = {} for {}.\x1b[0m",
+            key,
+            value,
+            self.get_name(id)
+        );
+    }
+
+    fn print_write(&self, key: &str, value: &str, id: TransactionId) {
+        println!(
+            "\x1b[1;95m[=]\x1b[0m \x1b[95mWrote {} = {} by {}.\x1b[0m",
+            key,
+            value,
+            self.get_name(id)
+        );
+    }
+
+    fn print_commit(&self, id: TransactionId) {
+        println!(
+            "\x1b[1;92m[+]\x1b[0m \x1b[92m{} successfully commited.\x1b[0m",
+            self.get_name(id)
+        );
+    }
+
+    fn print_abort(&self, id: TransactionId) {
+        println!(
+            "\x1b[1;91m[-]\x1b[0m \x1b[91m{} aborted.\x1b[0m",
+            self.get_name(id)
+        );
     }
 }
 
