@@ -176,6 +176,8 @@ pub struct TransactionManager {
     senders: HashMap<u32, Sender<OpMessage>>,
     commited: u32,
     aborted: u32,
+    aborted_txs: HashSet<TransactionId>,
+    commited_txs: HashSet<TransactionId>,
     alg: Protocol,
     pool: Vec<JoinHandle<()>>,
     log: Vec<Log>,
@@ -201,6 +203,8 @@ impl TransactionManager {
             senders: HashMap::new(),
             commited: 0,
             aborted: 0,
+            aborted_txs: HashSet::new(),
+            commited_txs: HashSet::new(),
             alg,
             pool: vec![],
             log: vec![],
@@ -255,9 +259,29 @@ impl TransactionManager {
 
         println!();
         println!("\x1b[1;96m[SUMMARY]\x1b[0m");
-        println!(
-            "\x1b[1;34m[?]\x1b[0m \x1b[34mStorage after all transactions commited/aborted\x1b[0m"
-        );
+        if self.aborted == 0 {
+            println!("\x1b[1;34m[?]\x1b[0m All transactions commited.");
+        } else {
+            let commited_txs_str: Vec<String> = self
+                .commited_txs
+                .iter()
+                .map(|tx| self.get_name(*tx).clone())
+                .collect();
+            let aborted_txs_str: Vec<String> = self
+                .aborted_txs
+                .iter()
+                .map(|tx| self.get_name(*tx).clone())
+                .collect();
+            println!(
+                "\x1b[1;34m[?]\x1b[0m Commited transactions: {}",
+                commited_txs_str.join(", ")
+            );
+            println!(
+                "\x1b[1;34m[?]\x1b[0m Aborted transactions: {}",
+                aborted_txs_str.join(", ")
+            );
+        }
+        println!("\x1b[1;34m[?]\x1b[0m Storage after all transactions commited/aborted");
         self.storage_manager.print();
         println!();
     }
@@ -369,13 +393,15 @@ impl TransactionManager {
     }
 
     pub fn handle_commit(&mut self, id: TransactionId, frame: StorageManager) {
+        if self.aborted_txs.contains(&id) {
+            return;
+        }
+
         match self.alg {
             Protocol::Lock => {
                 self.commited += 1;
-                println!(
-                    "\x1b[1;92m[+]\x1b[0m {} successfully commited.",
-                    self.get_name(id)
-                );
+                self.print_commit(id);
+                self.commited_txs.insert(id);
             }
             Protocol::Validation => {
                 println!("\x1b[1;34m[?]\x1b[0m Validating {}", self.get_name(id));
@@ -408,6 +434,7 @@ impl TransactionManager {
                     self.ts_manager.validate(id);
                     self.commited += 1;
                     self.print_commit(id);
+                    self.commited_txs.insert(id);
                 } else {
                     println!("\x1b[1;91m[-]\x1b[0m Validation failed.");
                     self.handle_abort(id, false);
@@ -425,6 +452,7 @@ impl TransactionManager {
                 self.ts_manager.validate(id);
                 self.commited += 1;
                 self.print_commit(id);
+                self.commited_txs.insert(id);
             }
         }
 
@@ -470,11 +498,10 @@ impl TransactionManager {
         for aborted_tx in aborted_txs.iter() {
             if with_send {
                 let sender = self.senders.get(&aborted_tx).unwrap();
-                sender
-                    .send(OpMessage::Abort)
-                    .expect("Sender manager read error");
+                let _ = sender.send(OpMessage::Abort);
             }
 
+            self.aborted_txs.insert(*aborted_tx);
             self.print_abort(*aborted_tx);
             self.aborted += 1;
         }
